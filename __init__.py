@@ -2,62 +2,76 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-
-import os, json
-from typing import Dict
-
-DATA_PATH = os.path.join(os.path.dirname(__file__), "colorcoding_data.json")
-
-
+import os
+import json
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Iterable, Tuple
 
-from aqt import mw
+from aqt import mw, gui_hooks
 from aqt.qt import (
     QAction,
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QColorDialog,
+    QColor,
     QDialog,
-    QVBoxLayout,
+    QGuiApplication,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
-    QCheckBox,
     QMessageBox,
+    QPushButton,
+    QPlainTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QFileDialog,
+    QWidget,
     Qt,
 )
 from aqt.utils import showInfo, tooltip
 
-from aqt.qt import QApplication
+# -------------------------------------------------------------------
+# Paths & constants
+# -------------------------------------------------------------------
+ADDON_DIR = os.path.dirname(__file__)
+DATA_PATH = os.path.join(ADDON_DIR, "colorcoding_data.json")
 
-from aqt.qt import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QFileDialog, QColorDialog, QWidget, Qt, QMessageBox,
-    QPlainTextEdit, QGuiApplication
-)
+# -------------------------------------------------------------------
+# Add-on identity for config I/O (robust)
+# -------------------------------------------------------------------
+def _detect_addon_id() -> str:
+    try:
+        mod = __name__
+        a_id = mw.addonManager.addonFromModule(mod)
+        if a_id:
+            return a_id
+    except Exception:
+        pass
+    return os.path.basename(ADDON_DIR)
 
+ADDON_ID = _detect_addon_id()
 
-# At top of the file with your other imports
-from aqt.qt import QAbstractItemView, Qt
-
-
-# --- Add-on identity robust for config I/O ---
-ADDON_MOD = __name__
-try:
-    ADDON_ID = mw.addonManager.addonFromModule(ADDON_MOD) or ADDON_MOD
-except Exception:
-    ADDON_ID = ADDON_MOD
-
-# ---- Safe config helpers ----
+# -------------------------------------------------------------------
+# Config helpers
+# -------------------------------------------------------------------
 def _read_cfg() -> dict:
-    cfg = mw.addonManager.getConfig(ADDON_ID)
+    try:
+        cfg = mw.addonManager.getConfig(ADDON_ID)
+    except Exception:
+        cfg = {}
     return cfg if isinstance(cfg, dict) else {}
 
 def _write_cfg(cfg: dict) -> None:
     if not isinstance(cfg, dict):
         cfg = {}
-    mw.addonManager.writeConfig(ADDON_ID, cfg)
+    try:
+        mw.addonManager.writeConfig(ADDON_ID, cfg)
+    except Exception:
+        pass
 
 def _ensure_cfg_initialized() -> dict:
     cfg = _read_cfg()
@@ -66,117 +80,97 @@ def _ensure_cfg_initialized() -> dict:
         _write_cfg(cfg)
     return cfg
 
-
-def _multi_select_mode():
-    """Return a MultiSelection enum that works in both Qt5 and Qt6."""
-    # PyQt6 preferred
+# -------------------------------------------------------------------
+# Color table storage: config (primary) + JSON fallback
+# -------------------------------------------------------------------
+def _load_entries_from_json() -> List[dict]:
     try:
-        return QAbstractItemView.SelectionMode.MultiSelection  # PyQt6
-    except AttributeError:
+        if os.path.exists(DATA_PATH):
+            with open(DATA_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
         pass
-    # Fallbacks
+    return []
+
+def _save_entries_to_json(entries: List[dict]) -> None:
     try:
-        return Qt.SelectionMode.MultiSelection  # PyQt6 alternative
-    except AttributeError:
+        with open(DATA_PATH, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+    except Exception:
+        # Silent fail to avoid UI noise; user still has config
         pass
-    try:
-        return QAbstractItemView.MultiSelection  # PyQt5
-    except AttributeError:
-        pass
-    # Last resort: ExtendedSelection still allows multiple selection
-    try:
-        return QAbstractItemView.SelectionMode.ExtendedSelection
-    except AttributeError:
-        return QAbstractItemView.ExtendedSelection
-
-
-
-# =========================
-# 1) Get your color table
-# =========================
-# Reuse your existing color table loader if you already have one.
-# Try to import from your extension; fall back to a simple config example.
-
-
-import json
-import os
-from typing import Dict
-
-
-
-# ---- Safe config helpers ----
-def _read_cfg() -> dict:
-    """Return this add-on's config dict; never None."""
-    cfg = mw.addonManager.getConfig(__name__)
-    return cfg if isinstance(cfg, dict) else {}
-
-def _write_cfg(cfg: dict) -> None:
-    """Persist config, ensuring it's a dict."""
-    if not isinstance(cfg, dict):
-        cfg = {}
-    mw.addonManager.writeConfig(__name__, cfg)
-
-def _ensure_cfg_initialized() -> dict:
-    """
-    Ensure config has the expected keys on first run.
-    Returns the (possibly updated) config dict.
-    """
-    cfg = _read_cfg()
-    
-    if "color_entries" not in cfg or not isinstance(cfg["color_entries"], list):
-        cfg["color_entries"] = []  # start empty list
-        _write_cfg(cfg)
-    return cfg
-
-
 
 def get_color_table() -> Dict[str, str]:
-    """
-    Primary source: add-on config -> config["color_entries"] (list of {word,group,color}).
-    Fallback: colorcoding_data.json (same list format).
-    Returns a flat {word: color} dict for the batch processor.
-    """
-    # 1) Config
+    table: Dict[str, str] = {}
     cfg = _ensure_cfg_initialized()
     entries = cfg.get("color_entries", [])
-    table: Dict[str, str] = {}
-    if isinstance(entries, list):
+    if isinstance(entries, list) and entries:
         for row in entries:
             if isinstance(row, dict):
                 w = str(row.get("word", "")).strip()
                 c = str(row.get("color", "")).strip()
                 if w and c:
                     table[w] = c
-    if table:
         return table
-
-    # 2) Fallback file
-    try:
-        with open(DATA_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            for row in data:
-                if isinstance(row, dict):
-                    w = str(row.get("word", "")).strip()
-                    c = str(row.get("color", "")).strip()
-                    if w and c:
-                        table[w] = c
-    except Exception:
-        pass
-
+    # Fallback to JSON if config empty
+    for row in _load_entries_from_json():
+        if isinstance(row, dict):
+            w = str(row.get("word", "")).strip()
+            c = str(row.get("color", "")).strip()
+            if w and c:
+                table[w] = c
     return table
 
+def get_entries_for_editor() -> List[dict]:
+    cfg = _ensure_cfg_initialized()
+    entries = cfg.get("color_entries", [])
+    if isinstance(entries, list) and entries:
+        return entries
+    return _load_entries_from_json()
 
+def set_color_table_entries(entries: List[dict]) -> None:
+    cfg = _ensure_cfg_initialized()
+    cfg["color_entries"] = entries
+    _write_cfg(cfg)
+    _save_entries_to_json(entries)
 
+# -------------------------------------------------------------------
+# Utility: Color parsing & swatch rendering
+# -------------------------------------------------------------------
+def _qcolor_from_str(s: str) -> QColor:
+    """Return a QColor from '#RRGGBB' or named color; invalid -> transparent."""
+    if not s:
+        return QColor(Qt.GlobalColor.transparent)
+    qc = QColor(s)
+    if not qc.isValid():
+        return QColor(Qt.GlobalColor.transparent)
+    return qc
 
+def _luminance(qc: QColor) -> float:
+    r, g, b = qc.redF(), qc.greenF(), qc.blueF()
+    # sRGB relative luminance
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-# --- COLOR TABLE EDITOR DIALOG ---
-from aqt.qt import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QFileDialog, QColorDialog, QWidget, Qt, QMessageBox
-)
-import json
+def _set_color_cell_visual(item: QTableWidgetItem) -> None:
+    """Paint cell background with the color and choose readable text color."""
+    if item is None:
+        return
+    text = item.text().strip()
+    qc = _qcolor_from_str(text)
+    if not qc.isValid():
+        # Reset to default appearance if invalid
+        item.setBackground(QColor(Qt.GlobalColor.transparent))
+        item.setForeground(QColor(Qt.GlobalColor.black))
+        return
+    item.setBackground(qc)
+    # Choose black/white based on luminance
+    fg = QColor(Qt.GlobalColor.black if _luminance(qc) > 0.6 else Qt.GlobalColor.white)
+    item.setForeground(fg)
 
+# -------------------------------------------------------------------
+# Color Table Editor Dialog
+# -------------------------------------------------------------------
 class ColorTableEditor(QDialog):
     COL_WORD = 0
     COL_COLOR = 1
@@ -185,15 +179,19 @@ class ColorTableEditor(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Color Table")
-        self.resize(700, 420)
+        self.resize(720, 460)
+
+        self._suppress_item_changed = False
 
         main = QVBoxLayout(self)
 
         # Info
-        main.addWidget(QLabel(
-            "Define words and their colors. The format mirrors the original ColorCoding add-on.\n"
-            "Columns: Word, Color (HTML name or HEX), Group (optional)."
-        ))
+        main.addWidget(
+            QLabel(
+                "Define words and their colors.\n"
+                "Columns: Word, Color (HTML name or HEX like #a5d8ff), Group (optional)."
+            )
+        )
 
         # Table
         self.table = QTableWidget(self)
@@ -202,37 +200,35 @@ class ColorTableEditor(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         main.addWidget(self.table)
 
-        # Buttons row 1
-        btns1 = QHBoxLayout()
+        # Buttons: add/remove/pick
+        row1 = QHBoxLayout()
         self.btn_add = QPushButton("Add row")
         self.btn_remove = QPushButton("Remove selected")
         self.btn_pick = QPushButton("Pick color…")
-        btns1.addWidget(self.btn_add)
-        btns1.addWidget(self.btn_remove)
-        btns1.addWidget(self.btn_pick)
-        btns1.addStretch(1)
-        main.addLayout(btns1)
+        row1.addWidget(self.btn_add)
+        row1.addWidget(self.btn_remove)
+        row1.addWidget(self.btn_pick)
+        row1.addStretch(1)
+        main.addLayout(row1)
 
-
-        # Buttons row 2 (import/export/clipboard)
-        btns2 = QHBoxLayout()
+        # Buttons: import/export/paste/copy
+        row2 = QHBoxLayout()
         self.btn_import = QPushButton("Import JSON…")
         self.btn_export = QPushButton("Export JSON…")
-        self.btn_paste = QPushButton("Paste JSON…")
-        self.btn_copy  = QPushButton("Copy JSON")
-        btns2.addWidget(self.btn_import)
-        btns2.addWidget(self.btn_export)
-        btns2.addSpacing(16)
-        btns2.addWidget(self.btn_paste)
-        btns2.addWidget(self.btn_copy)
-        btns2.addStretch(1)
-        main.addLayout(btns2)
+        self.btn_paste  = QPushButton("Paste JSON…")
+        self.btn_copy   = QPushButton("Copy JSON")
+        row2.addWidget(self.btn_import)
+        row2.addWidget(self.btn_export)
+        row2.addSpacing(16)
+        row2.addWidget(self.btn_paste)
+        row2.addWidget(self.btn_copy)
+        row2.addStretch(1)
+        main.addLayout(row2)
 
-
-        # OK/Cancel
+        # Ok/Cancel
         okrow = QHBoxLayout()
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_save = QPushButton("Save")
+        self.btn_save   = QPushButton("Save")
         okrow.addStretch(1)
         okrow.addWidget(self.btn_cancel)
         okrow.addWidget(self.btn_save)
@@ -248,95 +244,86 @@ class ColorTableEditor(QDialog):
         self.btn_save.clicked.connect(self._on_save)
         self.btn_paste.clicked.connect(self._paste_json_dialog)
         self.btn_copy.clicked.connect(self._copy_json_to_clipboard)
+        self.table.itemChanged.connect(self._on_item_changed)
 
-
-        # Load existing config into table
-        self._load_from_config()
+        # Load entries (from config, else JSON) and paint swatches
+        self._load_entries(get_entries_for_editor())
+        self._refresh_color_swatches()
 
     # ---- helpers ----
-    def _load_from_config(self):
-        cfg = mw.addonManager.getConfig(__name__) or {}
-        entries = cfg.get("color_entries", [])
-        if not isinstance(entries, list):
-            entries = []
-        self.table.setRowCount(0)
-        for row in entries:
-            word = str((row.get("word") or "")).strip()
-            color = str((row.get("color") or "")).strip()
-            group = str((row.get("group") or "")).strip()
-            self._append_row(word, color, group)
+    def _load_entries(self, entries: List[dict]):
+        self._suppress_item_changed = True
+        try:
+            self.table.setRowCount(0)
+            if not isinstance(entries, list):
+                entries = []
+            for row in entries:
+                if not isinstance(row, dict):
+                    continue
+                word  = str(row.get("word", "")).strip()
+                color = str(row.get("color", "")).strip()
+                group = str(row.get("group", "")).strip()
+                if word and color:
+                    self._append_row(word, color, group)
+        finally:
+            self._suppress_item_changed = False
 
     def _append_row(self, word: str = "", color: str = "", group: str = ""):
         r = self.table.rowCount()
         self.table.insertRow(r)
-        self.table.setItem(r, self.COL_WORD, QTableWidgetItem(word))
-        self.table.setItem(r, self.COL_COLOR, QTableWidgetItem(color))
+        self.table.setItem(r, self.COL_WORD,  QTableWidgetItem(word))
+        color_item = QTableWidgetItem(color)
+        self.table.setItem(r, self.COL_COLOR, color_item)
         self.table.setItem(r, self.COL_GROUP, QTableWidgetItem(group))
-
-    def _add_row(self):
-        self._append_row()
+        _set_color_cell_visual(color_item)
 
     def _remove_selected(self):
         rows = sorted({idx.row() for idx in self.table.selectedIndexes()}, reverse=True)
         for r in rows:
             self.table.removeRow(r)
 
-    def _current_row(self):
-        idxs = self.table.selectedIndexes()
-        return idxs[0].row() if idxs else -1
-
     def _pick_color_for_selected(self):
-        r = self._current_row()
+        r = (self.table.selectedIndexes()[0].row() if self.table.selectedIndexes() else -1)
         if r < 0:
             QMessageBox.information(self, "Pick color", "Select a row first.")
             return
-        # Suggest current color
-        current = self.table.item(r, self.COL_COLOR)
-        initial = (current.text() if current else "#FFFFFF") or "#FFFFFF"
-        # QColorDialog returns QColor; handle gracefully
         qcolor = QColorDialog.getColor()
         if qcolor and qcolor.isValid():
-            hexcolor = qcolor.name()  # '#RRGGBB'
-            self.table.setItem(r, self.COL_COLOR, QTableWidgetItem(hexcolor))
+            item = self.table.item(r, self.COL_COLOR)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(r, self.COL_COLOR, item)
+            item.setText(qcolor.name())
+            _set_color_cell_visual(item)
 
-    def _collect_entries(self):
-        entries = []
+    def _add_row(self):
+        self._append_row()
+
+    def _collect_entries(self) -> List[dict]:
+        entries: List[dict] = []
         for r in range(self.table.rowCount()):
             w = self.table.item(r, self.COL_WORD)
             c = self.table.item(r, self.COL_COLOR)
             g = self.table.item(r, self.COL_GROUP)
-            word = (w.text() if w else "").strip()
+            word  = (w.text() if w else "").strip()
             color = (c.text() if c else "").strip()
             group = (g.text() if g else "").strip()
             if word and color:
                 entries.append({"word": word, "group": group, "color": color})
         return entries
 
-    
     def _on_save(self):
-        # Commit any in-progress cell edits before reading
+        # Commit any in-progress cell edits
         self.table.setFocus(Qt.FocusReason.OtherFocusReason)
         QApplication.processEvents()
-
         entries = self._collect_entries()
-
-        # Write to config
-        cfg = _ensure_cfg_initialized()
-        cfg["color_entries"] = entries
-        _write_cfg(cfg)
-
-        # Also mirror to a JSON file as a durable backup
-        try:
-            with open(DATA_PATH, "w", encoding="utf-8") as f:
-                json.dump(entries, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
+        set_color_table_entries(entries)
         self.accept()
 
-
     def _import_json(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import JSON", "", "JSON Files (*.json);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import JSON", "", "JSON Files (*.json);;All Files (*)"
+        )
         if not path:
             return
         try:
@@ -344,32 +331,33 @@ class ColorTableEditor(QDialog):
                 data = json.load(f)
             if not isinstance(data, list):
                 raise ValueError("JSON root must be a list of {word,group,color} objects")
-            # Replace table content
-            self.table.setRowCount(0)
-            for row in data:
-                if not isinstance(row, dict):
-                    continue
-                word = str(row.get("word", "")).strip()
-                color = str(row.get("color", "")).strip()
-                group = str(row.get("group", "")).strip()
-                if word and color:
-                    self._append_row(word, color, group)
+            self._load_entries(data)
+            self._refresh_color_swatches()
         except Exception as e:
             QMessageBox.critical(self, "Import JSON", f"Failed to import: {e}")
-    
-    
+
+    def _export_json(self):
+        entries = self._collect_entries()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export JSON", "colorcoding_data.json", "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(entries, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Export JSON", f"Failed to save: {e}")
+
     def _paste_json_dialog(self):
-        """Open a small modal to paste JSON and load into the table."""
         dlg = QDialog(self)
         dlg.setWindowTitle("Paste JSON")
         vbox = QVBoxLayout(dlg)
         vbox.addWidget(QLabel("Paste a JSON array of {word, group, color} objects:"))
-
         text = QPlainTextEdit(dlg)
-        text.setPlaceholderText('[{"word":"penicillin","group":"","color":"red"}, ...]')
+        text.setPlaceholderText('[{"word":"penicillin","group":"","color":"#ffcc99"}, ...]')
         text.setMinimumHeight(200)
         vbox.addWidget(text)
-
         btns = QHBoxLayout()
         btn_cancel = QPushButton("Cancel", dlg)
         btn_load = QPushButton("Load", dlg)
@@ -381,121 +369,91 @@ class ColorTableEditor(QDialog):
         def do_load():
             raw = text.toPlainText().strip()
             if not raw:
-                QMessageBox.information(dlg, "Paste JSON", "Nothing to load.")
                 return
             try:
                 data = json.loads(raw)
                 if not isinstance(data, list):
                     raise ValueError("JSON root must be a list")
-                # Replace current table with parsed entries
-                self.table.setRowCount(0)
-                added = 0
-                for row in data:
-                    if not isinstance(row, dict):
-                        continue
-                    word = str(row.get("word", "")).strip()
-                    color = str(row.get("color", "")).strip()
-                    group = str(row.get("group", "")).strip()
-                    if word and color:
-                        self._append_row(word, color, group)
-                        added += 1
-                if added == 0:
-                    QMessageBox.warning(dlg, "Paste JSON", "No valid rows found (need 'word' and 'color').")
-                    return
+                self._load_entries(data)
+                self._refresh_color_swatches()
                 dlg.accept()
             except Exception as e:
                 QMessageBox.critical(dlg, "Paste JSON", f"Invalid JSON:\n{e}")
 
         btn_cancel.clicked.connect(dlg.reject)
         btn_load.clicked.connect(do_load)
-
-        # Exec compat: Qt6/Qt5
         try:
-            res = dlg.exec()
+            dlg.exec()
         except AttributeError:
-            res = dlg.exec_()
-        return res
+            dlg.exec_()
 
     def _copy_json_to_clipboard(self):
-        """Serialize current table to JSON and copy to clipboard."""
         entries = self._collect_entries()
         payload = json.dumps(entries, ensure_ascii=False, indent=2)
-        cb = QGuiApplication.clipboard()
-        cb.setText(payload)
-        QMessageBox.information(self, "Copy JSON", "Current table copied to clipboard.")
+        QGuiApplication.clipboard().setText(payload)
 
-
-    def _export_json(self):
-        entries = self._collect_entries()
-        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "colorcoding_data.json", "JSON Files (*.json);;All Files (*)")
-        if not path:
-            return
+    def _refresh_color_swatches(self):
+        """Repaint all color cells based on their text."""
+        self._suppress_item_changed = True
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(entries, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Export JSON", "Saved.")
-        except Exception as e:
-            QMessageBox.critical(self, "Export JSON", f"Failed to save: {e}")
+            for r in range(self.table.rowCount()):
+                item = self.table.item(r, self.COL_COLOR)
+                if item:
+                    _set_color_cell_visual(item)
+        finally:
+            self._suppress_item_changed = False
 
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if self._suppress_item_changed:
+            return
+        if item.column() == self.COL_COLOR:
+            _set_color_cell_visual(item)
 
-
-
-
-
-def _exec_dialog(dlg) -> int:
-    """Return dialog result compatibly across Qt5/Qt6."""
-    # PyQt6
+# -------------------------------------------------------------------
+# Deck picker
+# -------------------------------------------------------------------
+def _multi_select_mode():
     try:
-        result = dlg.exec()
+        return QAbstractItemView.SelectionMode.MultiSelection  # PyQt6
     except AttributeError:
-        # PyQt5 fallback
-        result = dlg.exec_()
-    return result
-
-def _accepted_code() -> int:
-    """Return the Accepted enum value compatibly across Qt5/Qt6."""
-    from aqt.qt import QDialog
+        pass
     try:
-        return int(QDialog.DialogCode.Accepted)  # PyQt6
+        return Qt.SelectionMode.MultiSelection  # PyQt6 alt
     except AttributeError:
-        return int(QDialog.Accepted)             # PyQt5
+        pass
+    try:
+        return QAbstractItemView.MultiSelection  # PyQt5
+    except AttributeError:
+        pass
+    try:
+        return QAbstractItemView.SelectionMode.ExtendedSelection
+    except AttributeError:
+        return QAbstractItemView.ExtendedSelection
 
-
-
-# =========================
-# 2) Deck selection dialog
-# =========================
 class DeckPickerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Apply Color Coding to Selected Decks")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
 
         layout = QVBoxLayout(self)
-
         layout.addWidget(QLabel("Select one or more decks:"))
 
         self.deck_list = QListWidget(self)
         self.deck_list.setSelectionMode(_multi_select_mode())
         for d in sorted(deck_names_with_children_flag().keys()):
-            item = QListWidgetItem(d)
-            self.deck_list.addItem(item)
-
+            self.deck_list.addItem(QListWidgetItem(d))
         layout.addWidget(self.deck_list)
 
         # Options
         self.include_children_cb = QCheckBox("Include subdecks", self)
         self.include_children_cb.setChecked(True)
-
         self.skip_cloze_cb = QCheckBox("Skip Cloze models", self)
         self.skip_cloze_cb.setChecked(True)
-
         self.whole_words_cb = QCheckBox("Whole words only", self)
         self.whole_words_cb.setChecked(True)
-
         self.case_insensitive_cb = QCheckBox("Case insensitive", self)
         self.case_insensitive_cb.setChecked(True)
-
         self.dry_run_cb = QCheckBox("Dry run (don’t modify—report only)", self)
         self.dry_run_cb.setChecked(False)
 
@@ -537,62 +495,34 @@ class DeckPickerDialog(QDialog):
     def dry_run(self) -> bool:
         return self.dry_run_cb.isChecked()
 
-
 def deck_names_with_children_flag() -> Dict[str, bool]:
-    """
-    Returns deck names. The bool value isn't used here but is helpful
-    if you later want to show which decks have children.
-    """
     decks = mw.col.decks.all_names_and_ids()
-    # all_names_and_ids -> list of (name, id) in recent Anki versions
-    # Fallback if needed:
     if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
         return {name: True for (name, _id) in decks}
     else:
-        # Back-compat: derive names another way
         names = [d["name"] for d in mw.col.decks.all()]
         return {n: True for n in names}
 
-
-# =========================
-# 3) Core coloring helpers
-# =========================
-
+# -------------------------------------------------------------------
+# Core coloring helpers
+# -------------------------------------------------------------------
 @dataclass
 class ColoringOptions:
     whole_words: bool = True
     case_insensitive: bool = True
 
-
 def build_combined_regex(color_table: Dict[str, str], opts: ColoringOptions) -> Tuple[re.Pattern, Dict[str, str]]:
-    """
-    Build one combined regex that matches any of the words.
-    Returns (compiled_regex, normalized_key_to_color).
-    """
-    # Sort by length desc to prefer longer matches first
     words = sorted(color_table.keys(), key=len, reverse=True)
-
-    # Escape for regex and optionally wrap with word boundaries
     escaped = []
     for w in words:
         ew = re.escape(w)
         if opts.whole_words:
-            # \b has caveats for non-Latin scripts; offer a toggle in the dialog.
             ew = r"\b" + ew + r"\b"
         escaped.append(ew)
-
-    pattern = "|".join(escaped) if escaped else r"(?!x)x"  # never matches if empty
+    pattern = "|".join(escaped) if escaped else r"(?!x)x"
     flags = re.IGNORECASE if opts.case_insensitive else 0
-    return re.compile(pattern, flags), {k.lower() if opts.case_insensitive else k: v for k, v in color_table.items()}
-
-
-def already_colored(text: str) -> bool:
-    """
-    Quick heuristic: detect if we've already wrapped via this add-on.
-    We mark spans with class='cc-color' to avoid double-wrapping.
-    """
-    return 'class="cc-color"' in text or "class='cc-color'" in text
-
+    key_map = {k.lower() if opts.case_insensitive else k: v for k, v in color_table.items()}
+    return re.compile(pattern, flags), key_map
 
 def apply_color_coding_to_html(
     html: str,
@@ -600,75 +530,44 @@ def apply_color_coding_to_html(
     key_to_color: Dict[str, str],
     opts: ColoringOptions,
 ) -> Tuple[str, int]:
-    """
-    Apply coloring to an HTML field, skipping content already wrapped by this add-on.
-    Returns (new_html, replacements_count).
-    """
-
-    # Avoid double wrapping by ignoring content already wrapped with cc-color.
-    # If you want to *refresh* colors, you could first normalize previous spans:
-    # html = re.sub(r'<span class="cc-color"[^>]*>(.*?)</span>', r'\1', html)
-
     if not html or not regex.pattern:
         return html, 0
-
-    # To reduce false matches inside tag attributes, we'll skip replacements
-    # inside HTML tags by doing a light-weight scan: split by tags and only
-    # apply replacements on text chunks.
     parts = re.split(r"(<[^>]+>)", html)
     changed = False
     total_replacements = 0
-
     def repl(m: re.Match) -> str:
         nonlocal total_replacements
         matched_text = m.group(0)
         key = matched_text.lower() if opts.case_insensitive else matched_text
-        # Map back to canonical key (case-insensitive option)
         color = key_to_color.get(key)
-        if color is None:
-            # when case-insensitive and the matched text differs from keys,
-            # find the original key by lower() lookup
-            # For robustness, do another fallback: iterate once (rare).
-            lk = matched_text.lower()
-            color = key_to_color.get(lk)
+        if color is None and opts.case_insensitive:
+            color = key_to_color.get(matched_text.lower())
         if color is None:
             return matched_text
         total_replacements += 1
-        # Wrap with a recognizable class to avoid double wrapping later
         return f'<span class="cc-color" style="color:{color}">{matched_text}</span>'
-
     for i, chunk in enumerate(parts):
-        # Process only text nodes (non-tag chunks)
         if i % 2 == 0 and chunk and "cc-color" not in chunk:
             new_chunk, n = regex.subn(repl, chunk)
             if n:
                 changed = True
-                total_replacements += 0  # already counted in repl
                 parts[i] = new_chunk
-
     if not changed:
         return html, 0
-
     new_html = "".join(parts)
     return new_html, total_replacements
 
-
 def note_is_cloze(note) -> bool:
     mt = note.note_type()
-    # Anki models can be checked by type or name
-    return (mt.get("type") == 1) or ("Cloze" in (mt.get("name") or ""))  # 1 is Cloze in older schema
-
+    return (mt.get("type") == 1) or ("Cloze" in (mt.get("name") or ""))
 
 def quote_deck_for_search(deck_name: str) -> str:
-    # deck:"Name With Spaces"
     safe = deck_name.replace('"', '\\"')
     return f'deck:"{safe}"'
 
-
-# =========================
-# 4) The batch processor
-# =========================
-
+# -------------------------------------------------------------------
+# Batch processor
+# -------------------------------------------------------------------
 def color_notes_in_decks(
     deck_names: Iterable[str],
     include_children: bool,
@@ -676,13 +575,10 @@ def color_notes_in_decks(
     opts: ColoringOptions,
     dry_run: bool,
 ) -> Tuple[int, int, int]:
-    """
-    Returns (notes_seen, notes_modified, total_replacements).
-    """
     color_table = get_color_table()
-    regex, key_to_color = build_combined_regex(color_table, opts)
     if not color_table:
         raise RuntimeError("Color table is empty. Configure your color mappings first.")
+    regex, key_to_color = build_combined_regex(color_table, opts)
 
     notes_seen = 0
     notes_modified = 0
@@ -692,13 +588,10 @@ def color_notes_in_decks(
     queries = []
     for deck in deck_names:
         if include_children:
-            # In Anki search, "deck:Parent::*" selects children
-            # But the safest way is to just use deck:Parent and deck:Parent::*
             safe = deck.replace('"', '\\"')
             queries.append(f'(deck:"{safe}" OR deck:"{safe}::*")')
         else:
             queries.append(quote_deck_for_search(deck))
-
     if not queries:
         return 0, 0, 0
 
@@ -708,12 +601,6 @@ def color_notes_in_decks(
     mw.progress.start(label="Color Coding: scanning notes…", immediate=True, min=0, max=0)
     try:
         nids = mw.col.find_notes(search)
-
-        
-        tooltip(f"[ColorCoding] Search:\n{search}", parent=mw)
-        nids = mw.col.find_notes(search)
-        tooltip(f"[ColorCoding] Matching notes: {len(nids)}", parent=mw)
-
 
         for idx, nid in enumerate(nids):
             if mw.progress.want_cancel():
@@ -725,13 +612,10 @@ def color_notes_in_decks(
             if skip_cloze and note_is_cloze(note):
                 continue
 
-            # Apply to all fields
             modified = False
             replacements_for_note = 0
             for fname in note.keys():
                 original = note[fname]
-                # Skip if already colored to avoid repeated double work
-                # (we still pass through the function since it won't double-wrap)
                 new_val, num = apply_color_coding_to_html(original, regex, key_to_color, opts)
                 if num > 0 and new_val != original:
                     if not dry_run:
@@ -745,38 +629,44 @@ def color_notes_in_decks(
                 if not dry_run:
                     note.flush()
 
-            # Occasionally yield to UI
             if idx % 200 == 0:
                 mw.progress.update(label=f"Processing notes… ({idx+1}/{len(nids)})")
 
         if not dry_run:
-            mw.reset()  # refresh Browser/Review if open
+            mw.reset()  # refresh UI
 
     finally:
         mw.progress.finish()
 
     return notes_seen, notes_modified, total_replacements
 
+# -------------------------------------------------------------------
+# Menu actions
+# -------------------------------------------------------------------
+def _exec_dialog(dlg) -> int:
+    try:
+        return dlg.exec()
+    except AttributeError:
+        return dlg.exec_()
 
-# =========================
-# 5) Menu wiring
-# =========================
+def _accepted_code() -> int:
+    try:
+        return int(QDialog.DialogCode.Accepted)
+    except AttributeError:
+        return int(QDialog.Accepted)
 
 def on_apply_to_selected_decks():
     if mw is None or mw.col is None:
-        QMessageBox.warning(mw, "Color Coding", "Collection is not open.")
+        QMessageBox.warning(mw, "Color Coding Global", "Collection is not open.")
         return
 
     dlg = DeckPickerDialog(mw)
-    
     result = _exec_dialog(dlg)
     if int(result) != _accepted_code():
         return
 
-
     decks = dlg.selected_decks()
     if not decks:
-        tooltip("No decks selected.")
         return
 
     include_children = dlg.include_children()
@@ -820,41 +710,30 @@ def on_apply_to_selected_decks():
             f"You can undo via Edit → Undo (Color Coding Global)."
         )
 
-
-
-
-
 def on_edit_color_table():
-    dlg = ColorTableEditor(mw)
-    res = _exec_dialog(dlg)
-    if int(res) == _accepted_code():
-        from aqt.utils import tooltip
-        entries = _read_cfg().get("color_entries", [])
-        tooltip(f"Saved {len(entries)} color entries", parent=mw)
-
+    try:
+        dlg = ColorTableEditor(mw)
+        _exec_dialog(dlg)
+    except Exception as e:
+        QMessageBox.critical(mw, "Edit Color Table – Error", f"{type(e).__name__}: {e}")
 
 def add_menu_action():
     menu = getattr(mw.form, "menuTools", None)
     if not menu:
         return
-    submenu = menu.addMenu("Color Coding Global")
+    submenu = menu.addMenu("Color Coding Global (Deck Picker)")
     action_run = QAction("Apply to Selected Decks…", mw)
     action_run.triggered.connect(on_apply_to_selected_decks)
-    tooltip(f"[ColorCoding] Loaded entries: {len(get_color_table())}", parent=mw)
     submenu.addAction(action_run)
-
-    # NEW: editor
     action_edit = QAction("Edit Color Table…", mw)
     action_edit.triggered.connect(on_edit_color_table)
     submenu.addAction(action_edit)
 
-
-
-if "mw" in globals() and mw:
+# -------------------------------------------------------------------
+# Initialize AFTER main window is fully ready (Anki 25.x: no args)
+# -------------------------------------------------------------------
+def _on_main_window_ready():
     _ensure_cfg_initialized()
+    add_menu_action()
 
-
-
-add_menu_action()
-
-
+gui_hooks.main_window_did_init.append(_on_main_window_ready)
