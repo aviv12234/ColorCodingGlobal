@@ -2,6 +2,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+
+import os, json
+from typing import Dict
+
+DATA_PATH = os.path.join(os.path.dirname(__file__), "colorcoding_data.json")
+
+
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Iterable, Tuple
@@ -22,7 +29,7 @@ from aqt.qt import (
 )
 from aqt.utils import showInfo, tooltip
 
-
+from aqt.qt import QApplication
 
 from aqt.qt import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
@@ -33,6 +40,32 @@ from aqt.qt import (
 
 # At top of the file with your other imports
 from aqt.qt import QAbstractItemView, Qt
+
+
+# --- Add-on identity robust for config I/O ---
+ADDON_MOD = __name__
+try:
+    ADDON_ID = mw.addonManager.addonFromModule(ADDON_MOD) or ADDON_MOD
+except Exception:
+    ADDON_ID = ADDON_MOD
+
+# ---- Safe config helpers ----
+def _read_cfg() -> dict:
+    cfg = mw.addonManager.getConfig(ADDON_ID)
+    return cfg if isinstance(cfg, dict) else {}
+
+def _write_cfg(cfg: dict) -> None:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    mw.addonManager.writeConfig(ADDON_ID, cfg)
+
+def _ensure_cfg_initialized() -> dict:
+    cfg = _read_cfg()
+    if "color_entries" not in cfg or not isinstance(cfg["color_entries"], list):
+        cfg["color_entries"] = []
+        _write_cfg(cfg)
+    return cfg
+
 
 def _multi_select_mode():
     """Return a MultiSelection enum that works in both Qt5 and Qt6."""
@@ -96,29 +129,43 @@ def _ensure_cfg_initialized() -> dict:
     return cfg
 
 
-# --- CONFIG LOADER (used by batch run) ---
 
 def get_color_table() -> Dict[str, str]:
     """
-    Load {word: color} from config['color_entries'] (list of dicts with keys: word, color, group).
-    Returns {} if nothing configured yet.
+    Primary source: add-on config -> config["color_entries"] (list of {word,group,color}).
+    Fallback: colorcoding_data.json (same list format).
+    Returns a flat {word: color} dict for the batch processor.
     """
-    try:
-        cfg = _ensure_cfg_initialized()
-        entries = cfg.get("color_entries", [])
-        if not isinstance(entries, list):
-            return {}
-        table: Dict[str, str] = {}
+    # 1) Config
+    cfg = _ensure_cfg_initialized()
+    entries = cfg.get("color_entries", [])
+    table: Dict[str, str] = {}
+    if isinstance(entries, list):
         for row in entries:
-            if not isinstance(row, dict):
-                continue
-            w = str(row.get("word", "")).strip()
-            c = str(row.get("color", "")).strip()
-            if w and c:
-                table[w] = c
+            if isinstance(row, dict):
+                w = str(row.get("word", "")).strip()
+                c = str(row.get("color", "")).strip()
+                if w and c:
+                    table[w] = c
+    if table:
         return table
+
+    # 2) Fallback file
+    try:
+        with open(DATA_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            for row in data:
+                if isinstance(row, dict):
+                    w = str(row.get("word", "")).strip()
+                    c = str(row.get("color", "")).strip()
+                    if w and c:
+                        table[w] = c
     except Exception:
-        return {}
+        pass
+
+    return table
+
 
 
 
@@ -265,13 +312,28 @@ class ColorTableEditor(QDialog):
                 entries.append({"word": word, "group": group, "color": color})
         return entries
 
+    
     def _on_save(self):
+        # Commit any in-progress cell edits before reading
+        self.table.setFocus(Qt.FocusReason.OtherFocusReason)
+        QApplication.processEvents()
+
         entries = self._collect_entries()
-        # Write into our add-on config
-        cfg = mw.addonManager.getConfig(__name__) or {}
+
+        # Write to config
+        cfg = _ensure_cfg_initialized()
         cfg["color_entries"] = entries
-        mw.addonManager.writeConfig(__name__, cfg)
+        _write_cfg(cfg)
+
+        # Also mirror to a JSON file as a durable backup
+        try:
+            with open(DATA_PATH, "w", encoding="utf-8") as f:
+                json.dump(entries, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
         self.accept()
+
 
     def _import_json(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import JSON", "", "JSON Files (*.json);;All Files (*)")
@@ -646,6 +708,13 @@ def color_notes_in_decks(
     mw.progress.start(label="Color Coding: scanning notes…", immediate=True, min=0, max=0)
     try:
         nids = mw.col.find_notes(search)
+
+        
+        tooltip(f"[ColorCoding] Search:\n{search}", parent=mw)
+        nids = mw.col.find_notes(search)
+        tooltip(f"[ColorCoding] Matching notes: {len(nids)}", parent=mw)
+
+
         for idx, nid in enumerate(nids):
             if mw.progress.want_cancel():
                 break
@@ -754,15 +823,15 @@ def on_apply_to_selected_decks():
 
 
 
+
 def on_edit_color_table():
     dlg = ColorTableEditor(mw)
     res = _exec_dialog(dlg)
     if int(res) == _accepted_code():
-        # Optional: small tooltip confirming save
         from aqt.utils import tooltip
-        cfg = _read_cfg()
-        entries = cfg.get("color_entries", [])
+        entries = _read_cfg().get("color_entries", [])
         tooltip(f"Saved {len(entries)} color entries", parent=mw)
+
 
 def add_menu_action():
     menu = getattr(mw.form, "menuTools", None)
@@ -771,6 +840,7 @@ def add_menu_action():
     submenu = menu.addMenu("Color Coding Global")
     action_run = QAction("Apply to Selected Decks…", mw)
     action_run.triggered.connect(on_apply_to_selected_decks)
+    tooltip(f"[ColorCoding] Loaded entries: {len(get_color_table())}", parent=mw)
     submenu.addAction(action_run)
 
     # NEW: editor
@@ -779,8 +849,10 @@ def add_menu_action():
     submenu.addAction(action_edit)
 
 
+
 if "mw" in globals() and mw:
     _ensure_cfg_initialized()
+
 
 
 add_menu_action()
