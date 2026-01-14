@@ -23,6 +23,14 @@ from aqt.qt import (
 from aqt.utils import showInfo, tooltip
 
 
+
+from aqt.qt import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
+    QTableWidgetItem, QFileDialog, QColorDialog, QWidget, Qt, QMessageBox,
+    QPlainTextEdit, QGuiApplication
+)
+
+
 # At top of the file with your other imports
 from aqt.qt import QAbstractItemView, Qt
 
@@ -56,18 +64,47 @@ def _multi_select_mode():
 # Reuse your existing color table loader if you already have one.
 # Try to import from your extension; fall back to a simple config example.
 
+
+import json
+import os
+from typing import Dict
+
+
+
+# ---- Safe config helpers ----
+def _read_cfg() -> dict:
+    """Return this add-on's config dict; never None."""
+    cfg = mw.addonManager.getConfig(__name__)
+    return cfg if isinstance(cfg, dict) else {}
+
+def _write_cfg(cfg: dict) -> None:
+    """Persist config, ensuring it's a dict."""
+    if not isinstance(cfg, dict):
+        cfg = {}
+    mw.addonManager.writeConfig(__name__, cfg)
+
+def _ensure_cfg_initialized() -> dict:
+    """
+    Ensure config has the expected keys on first run.
+    Returns the (possibly updated) config dict.
+    """
+    cfg = _read_cfg()
+    
+    if "color_entries" not in cfg or not isinstance(cfg["color_entries"], list):
+        cfg["color_entries"] = []  # start empty list
+        _write_cfg(cfg)
+    return cfg
+
+
+# --- CONFIG LOADER (used by batch run) ---
+
 def get_color_table() -> Dict[str, str]:
     """
-    Load the 'normal version' ColorCoding data format from this add-on's config:
-    config["color_entries"] is expected to be a list like:
-    [
-      {"word": "penicillin", "group": "", "color": "red"},
-      {"word": "doxycycline", "group": "", "color": "green"}
-    ]
-    Returns a flat dict {word: color}.
+    Load {word: color} from config['color_entries'] (list of dicts with keys: word, color, group).
+    Returns {} if nothing configured yet.
     """
     try:
-        cfg = mw.addonManager.getConfig(__name__) or {}
+        cfg = _ensure_cfg_initialized()
         entries = cfg.get("color_entries", [])
         if not isinstance(entries, list):
             return {}
@@ -81,8 +118,265 @@ def get_color_table() -> Dict[str, str]:
                 table[w] = c
         return table
     except Exception:
-        # Fallback to empty table on any error
         return {}
+
+
+
+
+# --- COLOR TABLE EDITOR DIALOG ---
+from aqt.qt import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
+    QTableWidgetItem, QFileDialog, QColorDialog, QWidget, Qt, QMessageBox
+)
+import json
+
+class ColorTableEditor(QDialog):
+    COL_WORD = 0
+    COL_COLOR = 1
+    COL_GROUP = 2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Color Table")
+        self.resize(700, 420)
+
+        main = QVBoxLayout(self)
+
+        # Info
+        main.addWidget(QLabel(
+            "Define words and their colors. The format mirrors the original ColorCoding add-on.\n"
+            "Columns: Word, Color (HTML name or HEX), Group (optional)."
+        ))
+
+        # Table
+        self.table = QTableWidget(self)
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Word", "Color", "Group"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        main.addWidget(self.table)
+
+        # Buttons row 1
+        btns1 = QHBoxLayout()
+        self.btn_add = QPushButton("Add row")
+        self.btn_remove = QPushButton("Remove selected")
+        self.btn_pick = QPushButton("Pick color…")
+        btns1.addWidget(self.btn_add)
+        btns1.addWidget(self.btn_remove)
+        btns1.addWidget(self.btn_pick)
+        btns1.addStretch(1)
+        main.addLayout(btns1)
+
+
+        # Buttons row 2 (import/export/clipboard)
+        btns2 = QHBoxLayout()
+        self.btn_import = QPushButton("Import JSON…")
+        self.btn_export = QPushButton("Export JSON…")
+        self.btn_paste = QPushButton("Paste JSON…")
+        self.btn_copy  = QPushButton("Copy JSON")
+        btns2.addWidget(self.btn_import)
+        btns2.addWidget(self.btn_export)
+        btns2.addSpacing(16)
+        btns2.addWidget(self.btn_paste)
+        btns2.addWidget(self.btn_copy)
+        btns2.addStretch(1)
+        main.addLayout(btns2)
+
+
+        # OK/Cancel
+        okrow = QHBoxLayout()
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_save = QPushButton("Save")
+        okrow.addStretch(1)
+        okrow.addWidget(self.btn_cancel)
+        okrow.addWidget(self.btn_save)
+        main.addLayout(okrow)
+
+        # Wire
+        self.btn_add.clicked.connect(self._add_row)
+        self.btn_remove.clicked.connect(self._remove_selected)
+        self.btn_pick.clicked.connect(self._pick_color_for_selected)
+        self.btn_import.clicked.connect(self._import_json)
+        self.btn_export.clicked.connect(self._export_json)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_save.clicked.connect(self._on_save)
+        self.btn_paste.clicked.connect(self._paste_json_dialog)
+        self.btn_copy.clicked.connect(self._copy_json_to_clipboard)
+
+
+        # Load existing config into table
+        self._load_from_config()
+
+    # ---- helpers ----
+    def _load_from_config(self):
+        cfg = mw.addonManager.getConfig(__name__) or {}
+        entries = cfg.get("color_entries", [])
+        if not isinstance(entries, list):
+            entries = []
+        self.table.setRowCount(0)
+        for row in entries:
+            word = str((row.get("word") or "")).strip()
+            color = str((row.get("color") or "")).strip()
+            group = str((row.get("group") or "")).strip()
+            self._append_row(word, color, group)
+
+    def _append_row(self, word: str = "", color: str = "", group: str = ""):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, self.COL_WORD, QTableWidgetItem(word))
+        self.table.setItem(r, self.COL_COLOR, QTableWidgetItem(color))
+        self.table.setItem(r, self.COL_GROUP, QTableWidgetItem(group))
+
+    def _add_row(self):
+        self._append_row()
+
+    def _remove_selected(self):
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self.table.removeRow(r)
+
+    def _current_row(self):
+        idxs = self.table.selectedIndexes()
+        return idxs[0].row() if idxs else -1
+
+    def _pick_color_for_selected(self):
+        r = self._current_row()
+        if r < 0:
+            QMessageBox.information(self, "Pick color", "Select a row first.")
+            return
+        # Suggest current color
+        current = self.table.item(r, self.COL_COLOR)
+        initial = (current.text() if current else "#FFFFFF") or "#FFFFFF"
+        # QColorDialog returns QColor; handle gracefully
+        qcolor = QColorDialog.getColor()
+        if qcolor and qcolor.isValid():
+            hexcolor = qcolor.name()  # '#RRGGBB'
+            self.table.setItem(r, self.COL_COLOR, QTableWidgetItem(hexcolor))
+
+    def _collect_entries(self):
+        entries = []
+        for r in range(self.table.rowCount()):
+            w = self.table.item(r, self.COL_WORD)
+            c = self.table.item(r, self.COL_COLOR)
+            g = self.table.item(r, self.COL_GROUP)
+            word = (w.text() if w else "").strip()
+            color = (c.text() if c else "").strip()
+            group = (g.text() if g else "").strip()
+            if word and color:
+                entries.append({"word": word, "group": group, "color": color})
+        return entries
+
+    def _on_save(self):
+        entries = self._collect_entries()
+        # Write into our add-on config
+        cfg = mw.addonManager.getConfig(__name__) or {}
+        cfg["color_entries"] = entries
+        mw.addonManager.writeConfig(__name__, cfg)
+        self.accept()
+
+    def _import_json(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import JSON", "", "JSON Files (*.json);;All Files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError("JSON root must be a list of {word,group,color} objects")
+            # Replace table content
+            self.table.setRowCount(0)
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                word = str(row.get("word", "")).strip()
+                color = str(row.get("color", "")).strip()
+                group = str(row.get("group", "")).strip()
+                if word and color:
+                    self._append_row(word, color, group)
+        except Exception as e:
+            QMessageBox.critical(self, "Import JSON", f"Failed to import: {e}")
+    
+    
+    def _paste_json_dialog(self):
+        """Open a small modal to paste JSON and load into the table."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Paste JSON")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Paste a JSON array of {word, group, color} objects:"))
+
+        text = QPlainTextEdit(dlg)
+        text.setPlaceholderText('[{"word":"penicillin","group":"","color":"red"}, ...]')
+        text.setMinimumHeight(200)
+        vbox.addWidget(text)
+
+        btns = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel", dlg)
+        btn_load = QPushButton("Load", dlg)
+        btns.addStretch(1)
+        btns.addWidget(btn_cancel)
+        btns.addWidget(btn_load)
+        vbox.addLayout(btns)
+
+        def do_load():
+            raw = text.toPlainText().strip()
+            if not raw:
+                QMessageBox.information(dlg, "Paste JSON", "Nothing to load.")
+                return
+            try:
+                data = json.loads(raw)
+                if not isinstance(data, list):
+                    raise ValueError("JSON root must be a list")
+                # Replace current table with parsed entries
+                self.table.setRowCount(0)
+                added = 0
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    word = str(row.get("word", "")).strip()
+                    color = str(row.get("color", "")).strip()
+                    group = str(row.get("group", "")).strip()
+                    if word and color:
+                        self._append_row(word, color, group)
+                        added += 1
+                if added == 0:
+                    QMessageBox.warning(dlg, "Paste JSON", "No valid rows found (need 'word' and 'color').")
+                    return
+                dlg.accept()
+            except Exception as e:
+                QMessageBox.critical(dlg, "Paste JSON", f"Invalid JSON:\n{e}")
+
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_load.clicked.connect(do_load)
+
+        # Exec compat: Qt6/Qt5
+        try:
+            res = dlg.exec()
+        except AttributeError:
+            res = dlg.exec_()
+        return res
+
+    def _copy_json_to_clipboard(self):
+        """Serialize current table to JSON and copy to clipboard."""
+        entries = self._collect_entries()
+        payload = json.dumps(entries, ensure_ascii=False, indent=2)
+        cb = QGuiApplication.clipboard()
+        cb.setText(payload)
+        QMessageBox.information(self, "Copy JSON", "Current table copied to clipboard.")
+
+
+    def _export_json(self):
+        entries = self._collect_entries()
+        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "colorcoding_data.json", "JSON Files (*.json);;All Files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(entries, f, ensure_ascii=False, indent=2)
+            QMessageBox.information(self, "Export JSON", "Saved.")
+        except Exception as e:
+            QMessageBox.critical(self, "Export JSON", f"Failed to save: {e}")
+
+
+
 
 
 
@@ -459,17 +753,35 @@ def on_apply_to_selected_decks():
 
 
 
+
+def on_edit_color_table():
+    dlg = ColorTableEditor(mw)
+    res = _exec_dialog(dlg)
+    if int(res) == _accepted_code():
+        # Optional: small tooltip confirming save
+        from aqt.utils import tooltip
+        cfg = _read_cfg()
+        entries = cfg.get("color_entries", [])
+        tooltip(f"Saved {len(entries)} color entries", parent=mw)
+
 def add_menu_action():
     menu = getattr(mw.form, "menuTools", None)
     if not menu:
         return
-    # Create a proper submenu under Tools
-    submenu = menu.addMenu("Color Coding (Global)")  # <-- simple title is correct
-    action = QAction("Run Global Color Coding…", mw)
-    action.triggered.connect(on_apply_to_selected_decks)
-    # Optional: add a keyboard shortcut, e.g. Ctrl+Alt+C (Cmd+Alt+C on macOS)
-    # action.setShortcut("Ctrl+Alt+C")
-    submenu.addAction(action)
+    submenu = menu.addMenu("Color Coding Global")
+    action_run = QAction("Apply to Selected Decks…", mw)
+    action_run.triggered.connect(on_apply_to_selected_decks)
+    submenu.addAction(action_run)
+
+    # NEW: editor
+    action_edit = QAction("Edit Color Table…", mw)
+    action_edit.triggered.connect(on_edit_color_table)
+    submenu.addAction(action_edit)
+
+
+if "mw" in globals() and mw:
+    _ensure_cfg_initialized()
+
 
 add_menu_action()
 
