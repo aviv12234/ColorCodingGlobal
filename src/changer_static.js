@@ -1,6 +1,8 @@
 //changer_static.js
 // 2022-2024 Marc Schubert <schubert.mc.ai@gmail.com>
 
+
+
 console.log("Starting static changer");
 var word_data;
 
