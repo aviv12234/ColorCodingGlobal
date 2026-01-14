@@ -22,6 +22,34 @@ from aqt.qt import (
 )
 from aqt.utils import showInfo, tooltip
 
+
+# At top of the file with your other imports
+from aqt.qt import QAbstractItemView, Qt
+
+def _multi_select_mode():
+    """Return a MultiSelection enum that works in both Qt5 and Qt6."""
+    # PyQt6 preferred
+    try:
+        return QAbstractItemView.SelectionMode.MultiSelection  # PyQt6
+    except AttributeError:
+        pass
+    # Fallbacks
+    try:
+        return Qt.SelectionMode.MultiSelection  # PyQt6 alternative
+    except AttributeError:
+        pass
+    try:
+        return QAbstractItemView.MultiSelection  # PyQt5
+    except AttributeError:
+        pass
+    # Last resort: ExtendedSelection still allows multiple selection
+    try:
+        return QAbstractItemView.SelectionMode.ExtendedSelection
+    except AttributeError:
+        return QAbstractItemView.ExtendedSelection
+
+
+
 # =========================
 # 1) Get your color table
 # =========================
@@ -62,7 +90,7 @@ class DeckPickerDialog(QDialog):
         layout.addWidget(QLabel("Select one or more decks:"))
 
         self.deck_list = QListWidget(self)
-        self.deck_list.setSelectionMode(QListWidget.MultiSelection)
+        self.deck_list.setSelectionMode(_multi_select_mode())
         for d in sorted(deck_names_with_children_flag().keys()):
             item = QListWidgetItem(d)
             self.deck_list.addItem(item)
