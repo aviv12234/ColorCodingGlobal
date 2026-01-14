@@ -55,25 +55,55 @@ def _multi_select_mode():
 # =========================
 # Reuse your existing color table loader if you already have one.
 # Try to import from your extension; fall back to a simple config example.
+
 def get_color_table() -> Dict[str, str]:
     """
-    Return a dict {word: css_color}.
-
-    Replace this body to plug into your current color table logic
-    (e.g., read from CSV/config or import from your existing module).
+    Load the 'normal version' ColorCoding data format from this add-on's config:
+    config["color_entries"] is expected to be a list like:
+    [
+      {"word": "penicillin", "group": "", "color": "red"},
+      {"word": "doxycycline", "group": "", "color": "green"}
+    ]
+    Returns a flat dict {word: color}.
     """
     try:
-        # Example: if your project already defines color_table somewhere:
-        from .color_table import COLOR_TABLE  # noqa: F401
-        return dict(COLOR_TABLE)
+        cfg = mw.addonManager.getConfig(__name__) or {}
+        entries = cfg.get("color_entries", [])
+        if not isinstance(entries, list):
+            return {}
+        table: Dict[str, str] = {}
+        for row in entries:
+            if not isinstance(row, dict):
+                continue
+            w = str(row.get("word", "")).strip()
+            c = str(row.get("color", "")).strip()
+            if w and c:
+                table[w] = c
+        return table
     except Exception:
-        # Fallback example (replace with your real table)
-        return {
-            "photosynthesis": "#7fb3ff",
-            "mitochondria": "#ffb3d1",
-            "osmosis": "#b3ffcc",
-            "nucleus": "#ffd280",
-        }
+        # Fallback to empty table on any error
+        return {}
+
+
+
+def _exec_dialog(dlg) -> int:
+    """Return dialog result compatibly across Qt5/Qt6."""
+    # PyQt6
+    try:
+        result = dlg.exec()
+    except AttributeError:
+        # PyQt5 fallback
+        result = dlg.exec_()
+    return result
+
+def _accepted_code() -> int:
+    """Return the Accepted enum value compatibly across Qt5/Qt6."""
+    from aqt.qt import QDialog
+    try:
+        return int(QDialog.DialogCode.Accepted)  # PyQt6
+    except AttributeError:
+        return int(QDialog.Accepted)             # PyQt5
+
 
 
 # =========================
@@ -375,8 +405,11 @@ def on_apply_to_selected_decks():
         return
 
     dlg = DeckPickerDialog(mw)
-    if dlg.exec_() != QDialog.Accepted:
+    
+    result = _exec_dialog(dlg)
+    if int(result) != _accepted_code():
         return
+
 
     decks = dlg.selected_decks()
     if not decks:
