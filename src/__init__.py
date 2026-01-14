@@ -1,444 +1,415 @@
-# 2022-2024 Marc Schubert <schubert.mc.ai@gmail.com>
 
-from anki import hooks
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Iterable, Tuple
+
 from aqt import mw
-from aqt.qt import *
-from aqt import gui_hooks
-import os
-import json
-import sys
+from aqt.qt import (
+    QAction,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QCheckBox,
+    QMessageBox,
+    Qt,
+)
+from aqt.utils import showInfo, tooltip
 
-from PyQt6.QtWidgets import (QApplication, QWidget, QPushButton, QMainWindow, QTextEdit,
-                             QTableWidget, QTableWidgetItem, QVBoxLayout, QHBoxLayout,
-                             QInputDialog, QColorDialog, QDialog, QLabel, QLineEdit, 
-                             QMessageBox, QComboBox, QAbstractItemView)
-from PyQt6.QtGui import QColor
-from PyQt6.QtCore import Qt, pyqtSignal
+# =========================
+# 1) Get your color table
+# =========================
+# Reuse your existing color table loader if you already have one.
+# Try to import from your extension; fall back to a simple config example.
+def get_color_table() -> Dict[str, str]:
+    """
+    Return a dict {word: css_color}.
 
-addon_folder = os.path.dirname(__file__)
-
-def read_json():
-    filepath = os.path.join(addon_folder,"user_files","config.json")
-    file = open(filepath)
-    data = json.load(file)
-    return data
-
-def write_json(dump):
-    filepath = os.path.join(addon_folder , "user_files" , "config.json")
-    file = open(filepath, "w")
-    file.write(json.dumps(dump))
-    return 0
-
-
-def write_settings(settings):
-    filepath = os.path.join(addon_folder,"user_files", "settings.json")
-    with open(filepath, "w") as file:
-        json.dump(settings, file)
-
-def read_settings():
-    filepath = os.path.join(addon_folder,"user_files", "settings.json")
-    if os.path.exists(filepath):
-        with open(filepath) as file:
-            return json.load(file)
-    return {"fontWeight": "normal"}  
-
-class ManualEditing(QMainWindow):
-    data_saved = pyqtSignal()
-
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle("Manual Editing of Data")
-        self.layout = QVBoxLayout()
-        self.text =QTextEdit()
-        self.text.setText(json.dumps(read_json()))
-
-        self.saveButton = QPushButton("Save")
-        self.saveButton.clicked.connect(self.save_btn_clicked)
-
-        self.cancelButton = QPushButton("Cancel")
-        self.cancelButton.clicked.connect(self.cancel_btn_clicked)
-
-        self.btns = QWidget()
-        self.btn_layout = QHBoxLayout()
-        self.btn_layout.addWidget(self.cancelButton)
-        self.btn_layout.addWidget(self.saveButton)
-        self.btns.setLayout(self.btn_layout)
-
-        self.layout.addWidget(self.text)
-        self.layout.addWidget(self.btns)
-        self.mayor_widget = QWidget()
-        self.mayor_widget.setLayout(self.layout)
-
-        self.setCentralWidget(self.mayor_widget)
-
-    def save_btn_clicked(self):
-        plain_text = self.text.toPlainText()
-        try:
-            write_json(json.loads(plain_text))
-            self.data_saved.emit()
-            self.close()
-        except Exception as e:
-            error_json = '[{"word": "Ramucirumab", "group": "VEGF-Inhibitor", "color": "MediumTurquoise"}, {"word": "Certolizumab", "group": "TNF-Inhibitor", "color": "DarkTurquoise"}, {"word": "CiclosporinA", "group": "Calcineurin-Inhibitor", "color": "Teal"}]'
-            QMessageBox.critical(self, "JSON Format Error", "Invalid JSON format. Please ensure the data is correctly formatted as a JSON object. Example format:\n" + error_json + "\nError details: " + str(e))
-        
-
-    def cancel_btn_clicked(self):
-        self.close()
+    Replace this body to plug into your current color table logic
+    (e.g., read from CSV/config or import from your existing module).
+    """
+    try:
+        # Example: if your project already defines color_table somewhere:
+        from .color_table import COLOR_TABLE  # noqa: F401
+        return dict(COLOR_TABLE)
+    except Exception:
+        # Fallback example (replace with your real table)
+        return {
+            "photosynthesis": "#7fb3ff",
+            "mitochondria": "#ffb3d1",
+            "osmosis": "#b3ffcc",
+            "nucleus": "#ffd280",
+        }
 
 
-class EntryDialog(QDialog):
-    def __init__(self, word='', group='', color=QColor('white'), parent=None):
-        super().__init__(parent)
-        self.setWindowTitle('Edit Entry')
-
-        # Setup layout
-        layout = QVBoxLayout()
-
-        # Word field
-        self.word_edit = QLineEdit(word)
-        layout.addWidget(QLabel('Word:'))
-        layout.addWidget(self.word_edit)
-
-        # Group field
-        self.group_edit = QLineEdit(group)
-        layout.addWidget(QLabel('Group:'))
-        layout.addWidget(self.group_edit)
-
-
-        # Color field
-        self.color_edit = QPushButton('Choose Color')
-        self.color_edit.clicked.connect(self.choose_color)
-        self.color = color
-        self.color_edit.setStyleSheet(f'background-color: {self.color.name()}')
-        layout.addWidget(QLabel('Color:'))
-        layout.addWidget(self.color_edit)
-
-        # Buttons for save or cancel
-        buttons_layout = QHBoxLayout()
-        self.btn_save = QPushButton('Save')
-        self.btn_save.clicked.connect(self.accept)
-        self.btn_cancel = QPushButton('Cancel')
-        self.btn_cancel.clicked.connect(self.reject)
-        buttons_layout.addWidget(self.btn_save)
-        buttons_layout.addWidget(self.btn_cancel)
-        layout.addLayout(buttons_layout)
-
-        self.setLayout(layout)
-
-    def choose_color(self):
-        color = QColorDialog.getColor(self.color)
-        if color.isValid():
-            self.color = color
-            self.color_edit.setStyleSheet(f'background-color: {color.name()}')
-
-    def get_data(self):
-        return self.word_edit.text(), self.group_edit.text(), self.color.name()
-
-
-class ShareDialog(QDialog):
-    def __init__(self, data, parent=None):
-        super().__init__(parent)
-        self.data = data
-        self.setWindowTitle("Share Your Dataset with the Community")
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Message Label
-        message_label = QLabel("""
-        <p><strong>Have you created a 🎨 ColorCoding 🌈 dataset that has been particularly helpful in your studies?</strong><br> Do you think it might benefit others as well?<br><br>
-        We encourage you to share your dataset with the community!</p>
-        <p><strong>How to Share Your Datasets:</strong><br>
-        1. Save your dataset using the button below to a location on your computer.<br>
-        2. Send the file to <a href="mailto:schubert.mc.ai@gmail.com">schubertmc</a>. We will then upload it to the ‘Datasets’ section <a href=https://ankiweb.net/shared/info/2113325087>here</a>.</p>
-        <p>Please let us know if you want to be credited for your dataset or prefer to remain anonymous.</p>
-        <p><strong>🎨 Thank you! 🌈</strong><br><br>
-        Please choose a location to save your dataset file below:</p>
-        """)
-        message_label.setOpenExternalLinks(True)
-        message_label.setTextFormat(Qt.TextFormat.RichText)  
-
-
-        layout.addWidget(message_label)
-
-        # Save Button
-        save_button = QPushButton("Save Dataset As...")
-        save_button.clicked.connect(self.save_file)
-        layout.addWidget(save_button)
-
-        self.setLayout(layout)
-
-    def save_file(self):
-        options = QFileDialog.Option.DontUseNativeDialog
-        file_name, _ = QFileDialog.getSaveFileName(self, 
-                                                "Save File", 
-                                                "", 
-                                                "JSON Files (*.json)", 
-                                                options=options)
-        if file_name:
-            with open(file_name, 'w') as f:
-                json.dump(self.data, f, indent=4)
-            self.accept()
-
-class SettingsDialog(QDialog):
+# =========================
+# 2) Deck selection dialog
+# =========================
+class DeckPickerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('Settings')
-        self.setFixedSize(300, 100)
+        self.setWindowTitle("Apply Color Coding to Selected Decks")
+        self.setMinimumWidth(480)
 
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
 
-        self.boldCheckBox = QCheckBox("Apply bold formatting to colored words")
-        cur_setting = self.read_current_setting()
-        font_bool = 1 if cur_setting == "bold" else 0
-        self.boldCheckBox.setChecked(font_bool)
-        layout.addWidget(self.boldCheckBox)
+        layout.addWidget(QLabel("Select one or more decks:"))
 
-        self.btnSave = QPushButton("Save")
-        self.btnSave.clicked.connect(self.save_settings)
-        self.btnCancel = QPushButton("Cancel")
-        self.btnCancel.clicked.connect(self.cancel_settings)
-        layout.addWidget(self.btnSave)
+        self.deck_list = QListWidget(self)
+        self.deck_list.setSelectionMode(QListWidget.MultiSelection)
+        for d in sorted(deck_names_with_children_flag().keys()):
+            item = QListWidgetItem(d)
+            self.deck_list.addItem(item)
 
-        self.setLayout(layout)
+        layout.addWidget(self.deck_list)
 
-    def cancel_settings(self):
-        print("Changes canceled!")
-        self.close()
+        # Options
+        self.include_children_cb = QCheckBox("Include subdecks", self)
+        self.include_children_cb.setChecked(True)
 
-    def save_settings(self):
-        bold_setting = self.boldCheckBox.isChecked()
-        print(bold_setting)
-        bold_string = "bold" if bold_setting else "normal"
+        self.skip_cloze_cb = QCheckBox("Skip Cloze models", self)
+        self.skip_cloze_cb.setChecked(True)
 
-        self.write_settings({'fontWeight': bold_string})
-        self.accept() 
+        self.whole_words_cb = QCheckBox("Whole words only", self)
+        self.whole_words_cb.setChecked(True)
 
-    def read_current_setting(self):
-        settings = self.read_settings()
-        return settings.get('fontWeight', False)
+        self.case_insensitive_cb = QCheckBox("Case insensitive", self)
+        self.case_insensitive_cb.setChecked(True)
 
-    @staticmethod
-    def write_settings(settings):
-        filepath = os.path.join(addon_folder,"user_files" ,"settings.json")  
-        with open(filepath, "w") as file:
-            json.dump(settings, file)
+        self.dry_run_cb = QCheckBox("Dry run (don’t modify—report only)", self)
+        self.dry_run_cb.setChecked(False)
 
-    @staticmethod
-    def read_settings():
-        filepath = os.path.join(addon_folder,"user_files" , "settings.json")
-        if os.path.exists(filepath):
-            with open(filepath) as file:
-                return json.load(file)
-        return {}
+        for cb in [
+            self.include_children_cb,
+            self.skip_cloze_cb,
+            self.whole_words_cb,
+            self.case_insensitive_cb,
+            self.dry_run_cb,
+        ]:
+            layout.addWidget(cb)
 
+        # Buttons
+        btn_row = QHBoxLayout()
+        self.run_btn = QPushButton("Run")
+        self.cancel_btn = QPushButton("Cancel")
+        self.run_btn.clicked.connect(self.accept)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.cancel_btn)
+        btn_row.addWidget(self.run_btn)
+        layout.addLayout(btn_row)
 
+    def selected_decks(self) -> List[str]:
+        return [i.text() for i in self.deck_list.selectedItems()]
 
-class ComplexWindow4(QMainWindow):
-    def __init__(self):
-        super().__init__()
+    def include_children(self) -> bool:
+        return self.include_children_cb.isChecked()
 
-        self.initUI()
+    def skip_cloze(self) -> bool:
+        return self.skip_cloze_cb.isChecked()
 
-    def initUI(self):
-        self.setWindowTitle("🎨 Color Coding 🌈 - Settings")
-        self.setGeometry(100, 100, 600, 700) 
+    def whole_words(self) -> bool:
+        return self.whole_words_cb.isChecked()
 
-        # Main layout
-        main_layout = QVBoxLayout()
+    def case_insensitive(self) -> bool:
+        return self.case_insensitive_cb.isChecked()
 
-        # Button to add entries
-        self.btnAdd = QPushButton("Add Entry")
-        self.btnAdd.clicked.connect(self.add_entry)
-        main_layout.addWidget(self.btnAdd)
-
-
-        # Table setup
-        self.table = QTableWidget()
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnCount(5)  
-        self.table.setHorizontalHeaderLabels(["Word", "Group", "Color", "Edit", "Delete"])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # Disable editing cells directly
-        self.load_data()
-        main_layout.addWidget(self.table)
+    def dry_run(self) -> bool:
+        return self.dry_run_cb.isChecked()
 
 
-        # Buttons at the bottom
-        button_layout = QHBoxLayout()
-        self.btnSave = QPushButton("Save")
-        self.btnCancel = QPushButton("Cancel")
-        self.btnSettings = QPushButton("Font Settings")
-        self.btnModifyManually = QPushButton("Modify Manually")
-        self.btnShare = QPushButton("Share your Dataset")
-        
-        # Connect buttons to their functionalities
-        self.btnSave.clicked.connect(self.save_data)
-        self.btnCancel.clicked.connect(self.cancel_changes)
-        self.btnModifyManually.clicked.connect(self.modify_manually)
-        self.btnShare.clicked.connect(self.share_functionality)
-        self.btnSettings.clicked.connect(self.open_settings_dialog)
-
-        # Adding buttons to the horizontal layout
-        button_layout.addWidget(self.btnSave)
-        button_layout.addWidget(self.btnCancel)
-        button_layout.addWidget(self.btnSettings)
-        button_layout.addWidget(self.btnModifyManually)
-        button_layout.addWidget(self.btnShare)
-
-        main_layout.addLayout(button_layout)
-
-        # Container widget
-        container = QWidget()
-        container.setLayout(main_layout)
-        self.setCentralWidget(container)
+def deck_names_with_children_flag() -> Dict[str, bool]:
+    """
+    Returns deck names. The bool value isn't used here but is helpful
+    if you later want to show which decks have children.
+    """
+    decks = mw.col.decks.all_names_and_ids()
+    # all_names_and_ids -> list of (name, id) in recent Anki versions
+    # Fallback if needed:
+    if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
+        return {name: True for (name, _id) in decks}
+    else:
+        # Back-compat: derive names another way
+        names = [d["name"] for d in mw.col.decks.all()]
+        return {n: True for n in names}
 
 
-    def save_data(self):
-        data_to_save = []
-        for row in range(self.table.rowCount()):
-        # Extract the data from each column in the row
-            #print(row)
-            word = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
-            group = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
-            color = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
-            data_to_save.append({
-                "word": word,
-                "group": group,
-                "color": color
-            })
-        try:
-            write_json(list(reversed(data_to_save)))
-            print("Data saved!")
-            self.close()
-        except Exception as e:
-            error_json = '[{"word": "Ramucirumab", "group": "VEGF-Inhibitor", "color": "MediumTurquoise"}, {"word": "Certolizumab", "group": "TNF-Inhibitor", "color": "DarkTurquoise"}, {"word": "CiclosporinA", "group": "Calcineurin-Inhibitor", "color": "Teal"}]'
-            QMessageBox.critical(self, "JSON Format Error", "Invalid JSON format. Please ensure the data is correctly formatted as a JSON object. Example format:\n" + error_json + "\nError details: " + str(e))   
+# =========================
+# 3) Core coloring helpers
+# =========================
 
-    def cancel_changes(self):
-        print("Changes canceled!")
-        self.close()
-
-    def modify_manually(self):
-        self.manual_editing = ManualEditing()
-        self.manual_editing.data_saved.connect(self.refresh_table)
-        self.manual_editing.show()
-        print("Modify manually activated!")
-
-    def refresh_table(self):
-        self.table.clearContents()
-        self.table.setRowCount(0)
-        self.load_data()
+@dataclass
+class ColoringOptions:
+    whole_words: bool = True
+    case_insensitive: bool = True
 
 
-    def load_data(self):
-        data_dict = read_json()
-        for entry in data_dict:
-            self.add_table_entry(entry['word'], entry['group'], entry['color'])
+def build_combined_regex(color_table: Dict[str, str], opts: ColoringOptions) -> Tuple[re.Pattern, Dict[str, str]]:
+    """
+    Build one combined regex that matches any of the words.
+    Returns (compiled_regex, normalized_key_to_color).
+    """
+    # Sort by length desc to prefer longer matches first
+    words = sorted(color_table.keys(), key=len, reverse=True)
 
-    def add_table_entry(self, word, group, color):
-        row_position = 0  # Always insert at the top
-        self.table.insertRow(row_position)
-        self.table.setItem(row_position, 0, QTableWidgetItem(word))
-        self.table.setItem(row_position, 1, QTableWidgetItem(group))
-        self.table.setItem(row_position, 2, QTableWidgetItem(color))
-        self.table.item(row_position, 2).setBackground(QColor(color))
+    # Escape for regex and optionally wrap with word boundaries
+    escaped = []
+    for w in words:
+        ew = re.escape(w)
+        if opts.whole_words:
+            # \b has caveats for non-Latin scripts; offer a toggle in the dialog.
+            ew = r"\b" + ew + r"\b"
+        escaped.append(ew)
 
-        # Edit button
-        btnEdit = QPushButton('Edit')
-        btnEdit.clicked.connect(self.edit_entry)
-        self.table.setCellWidget(row_position, 3, btnEdit)
-
-        # Delete button
-        btnDelete = QPushButton('Delete')
-        btnDelete.clicked.connect(self.delete_entry)
-        self.table.setCellWidget(row_position, 4, btnDelete)
-
-    def add_entry(self):
-        dialog = EntryDialog()
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            word, group, color = dialog.get_data()
-            self.add_table_entry(word, group, color)
-
-    def edit_entry(self):
-        button = self.sender()
-        if button:
-            row = self.table.indexAt(button.pos()).row()
-            current_word = self.table.item(row, 0).text()
-            current_group = self.table.item(row, 1).text()
-            current_color = self.table.item(row, 2).text()
-            dialog = EntryDialog(current_word, current_group, QColor(current_color))
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                word, group, color = dialog.get_data()
-                self.table.item(row, 0).setText(word)
-                self.table.item(row, 1).setText(group)
-                self.table.item(row, 2).setText(color)
-                self.table.item(row, 2).setBackground(QColor(color))
-
-    def delete_entry(self, row):
-        button = self.sender()
-        if button:
-            row = self.table.indexAt(button.pos()).row()
-            self.table.removeRow(row)
-    
-    def share_functionality(self):
-        data_to_share = read_json()
-        share_dialog = ShareDialog(data_to_share)
-        share_dialog.exec()
+    pattern = "|".join(escaped) if escaped else r"(?!x)x"  # never matches if empty
+    flags = re.IGNORECASE if opts.case_insensitive else 0
+    return re.compile(pattern, flags), {k.lower() if opts.case_insensitive else k: v for k, v in color_table.items()}
 
 
-    def open_settings_dialog(self):
-        self.settings_dialog = SettingsDialog(self)
-        self.settings_dialog.show()
-    
-
-    
-def complex_settings_gui():
-    mw.myWidget = widget = ComplexWindow4()
-    widget.show()
+def already_colored(text: str) -> bool:
+    """
+    Quick heuristic: detect if we've already wrapped via this add-on.
+    We mark spans with class='cc-color' to avoid double-wrapping.
+    """
+    return 'class="cc-color"' in text or "class='cc-color'" in text
 
 
-# Setup buttons
-def setupButtons(buttons, editor):
-    icon_path = os.path.join(addon_folder,"icon3232.png")
-    btn = editor.addButton(icon_path,
-                           "foo",
-                           performConversion,
-                           tip= "Color Words",
-                           label = "C",
-                           rightside=True, 
-                           )
-    buttons.append(btn)
+def apply_color_coding_to_html(
+    html: str,
+    regex: re.Pattern,
+    key_to_color: Dict[str, str],
+    opts: ColoringOptions,
+) -> Tuple[str, int]:
+    """
+    Apply coloring to an HTML field, skipping content already wrapped by this add-on.
+    Returns (new_html, replacements_count).
+    """
+
+    # Avoid double wrapping by ignoring content already wrapped with cc-color.
+    # If you want to *refresh* colors, you could first normalize previous spans:
+    # html = re.sub(r'<span class="cc-color"[^>]*>(.*?)</span>', r'\1', html)
+
+    if not html or not regex.pattern:
+        return html, 0
+
+    # To reduce false matches inside tag attributes, we'll skip replacements
+    # inside HTML tags by doing a light-weight scan: split by tags and only
+    # apply replacements on text chunks.
+    parts = re.split(r"(<[^>]+>)", html)
+    changed = False
+    total_replacements = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal total_replacements
+        matched_text = m.group(0)
+        key = matched_text.lower() if opts.case_insensitive else matched_text
+        # Map back to canonical key (case-insensitive option)
+        color = key_to_color.get(key)
+        if color is None:
+            # when case-insensitive and the matched text differs from keys,
+            # find the original key by lower() lookup
+            # For robustness, do another fallback: iterate once (rare).
+            lk = matched_text.lower()
+            color = key_to_color.get(lk)
+        if color is None:
+            return matched_text
+        total_replacements += 1
+        # Wrap with a recognizable class to avoid double wrapping later
+        return f'<span class="cc-color" style="color:{color}">{matched_text}</span>'
+
+    for i, chunk in enumerate(parts):
+        # Process only text nodes (non-tag chunks)
+        if i % 2 == 0 and chunk and "cc-color" not in chunk:
+            new_chunk, n = regex.subn(repl, chunk)
+            if n:
+                changed = True
+                total_replacements += 0  # already counted in repl
+                parts[i] = new_chunk
+
+    if not changed:
+        return html, 0
+
+    new_html = "".join(parts)
+    return new_html, total_replacements
 
 
-# Launch engine 
-def performConversion(editor):
-    webview = editor.web
-    js_path = os.path.join(addon_folder,"changer_static.js")
-    with open(js_path, "r", encoding="utf-8") as js_file:
-        js = js_file.read()
-        webview.eval(js)
-        data = read_json()
-        font_settings = read_settings()
-        fontWeight = font_settings.get("fontWeight")
-        webview.eval(f"initializeWithData({json.dumps(data)}, '{fontWeight}')")
+def note_is_cloze(note) -> bool:
+    mt = note.note_type()
+    # Anki models can be checked by type or name
+    return (mt.get("type") == 1) or ("Cloze" in (mt.get("name") or ""))  # 1 is Cloze in older schema
+
+
+def quote_deck_for_search(deck_name: str) -> str:
+    # deck:"Name With Spaces"
+    safe = deck_name.replace('"', '\\"')
+    return f'deck:"{safe}"'
+
+
+# =========================
+# 4) The batch processor
+# =========================
+
+def color_notes_in_decks(
+    deck_names: Iterable[str],
+    include_children: bool,
+    skip_cloze: bool,
+    opts: ColoringOptions,
+    dry_run: bool,
+) -> Tuple[int, int, int]:
+    """
+    Returns (notes_seen, notes_modified, total_replacements).
+    """
+    color_table = get_color_table()
+    regex, key_to_color = build_combined_regex(color_table, opts)
+    if not color_table:
+        raise RuntimeError("Color table is empty. Configure your color mappings first.")
+
+    notes_seen = 0
+    notes_modified = 0
+    total_replacements = 0
+
+    # Build search query
+    queries = []
+    for deck in deck_names:
+        if include_children:
+            # In Anki search, "deck:Parent::*" selects children
+            # But the safest way is to just use deck:Parent and deck:Parent::*
+            safe = deck.replace('"', '\\"')
+            queries.append(f'(deck:"{safe}" OR deck:"{safe}::*")')
+        else:
+            queries.append(quote_deck_for_search(deck))
+
+    if not queries:
+        return 0, 0, 0
+
+    search = " OR ".join(queries)
+
+    mw.checkpoint("Color Coding Global")
+    mw.progress.start(label="Color Coding: scanning notes…", immediate=True, min=0, max=0)
+    try:
+        nids = mw.col.find_notes(search)
+        for idx, nid in enumerate(nids):
+            if mw.progress.want_cancel():
+                break
+
+            note = mw.col.get_note(nid)
+            notes_seen += 1
+
+            if skip_cloze and note_is_cloze(note):
+                continue
+
+            # Apply to all fields
+            modified = False
+            replacements_for_note = 0
+            for fname in note.keys():
+                original = note[fname]
+                # Skip if already colored to avoid repeated double work
+                # (we still pass through the function since it won't double-wrap)
+                new_val, num = apply_color_coding_to_html(original, regex, key_to_color, opts)
+                if num > 0 and new_val != original:
+                    if not dry_run:
+                        note[fname] = new_val
+                    modified = True
+                    replacements_for_note += num
+
+            if modified:
+                notes_modified += 1
+                total_replacements += replacements_for_note
+                if not dry_run:
+                    note.flush()
+
+            # Occasionally yield to UI
+            if idx % 200 == 0:
+                mw.progress.update(label=f"Processing notes… ({idx+1}/{len(nids)})")
+
+        if not dry_run:
+            mw.reset()  # refresh Browser/Review if open
+
+    finally:
+        mw.progress.finish()
+
+    return notes_seen, notes_modified, total_replacements
+
+
+# =========================
+# 5) Menu wiring
+# =========================
+
+def on_apply_to_selected_decks():
+    if mw is None or mw.col is None:
+        QMessageBox.warning(mw, "Color Coding", "Collection is not open.")
+        return
+
+    dlg = DeckPickerDialog(mw)
+    if dlg.exec_() != QDialog.Accepted:
+        return
+
+    decks = dlg.selected_decks()
+    if not decks:
+        tooltip("No decks selected.")
+        return
+
+    include_children = dlg.include_children()
+    skip_cloze = dlg.skip_cloze()
+    opts = ColoringOptions(
+        whole_words=dlg.whole_words(),
+        case_insensitive=dlg.case_insensitive(),
+    )
+    dry_run = dlg.dry_run()
+
+    try:
+        notes_seen, notes_modified, total_replacements = color_notes_in_decks(
+            deck_names=decks,
+            include_children=include_children,
+            skip_cloze=skip_cloze,
+            opts=opts,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        QMessageBox.critical(mw, "Color Coding – Error", f"{type(e).__name__}: {e}")
+        return
+
+    if dry_run:
+        showInfo(
+            f"Dry run complete.\n\n"
+            f"Decks: {', '.join(decks)}\n"
+            f"Include subdecks: {'Yes' if include_children else 'No'}\n"
+            f"Notes scanned: {notes_seen}\n"
+            f"Notes that would change: {notes_modified}\n"
+            f"Total word matches: {total_replacements}\n"
+            f"(No notes were modified.)"
+        )
+    else:
+        showInfo(
+            f"Color coding complete.\n\n"
+            f"Decks: {', '.join(decks)}\n"
+            f"Include subdecks: {'Yes' if include_children else 'No'}\n"
+            f"Notes scanned: {notes_seen}\n"
+            f"Notes modified: {notes_modified}\n"
+            f"Total replacements made: {total_replacements}\n"
+            f"You can undo via Edit → Undo (Color Coding Global)."
+        )
 
 
 
-# Setup actions
-action_settings = QAction("🎨 Color Coding 🌈 ", mw)
-qconnect(action_settings.triggered, complex_settings_gui)
-mw.form.menuTools.addAction(action_settings)
+def add_menu_action():
+    menu = getattr(mw.form, "menuTools", None)
+    if not menu:
+        return
+    # Create a proper submenu under Tools
+    submenu = menu.addMenu("Color Coding (Global)")  # <-- simple title is correct
+    action = QAction("Run Global Color Coding…", mw)
+    action.triggered.connect(on_apply_to_selected_decks)
+    # Optional: add a keyboard shortcut, e.g. Ctrl+Alt+C (Cmd+Alt+C on macOS)
+    # action.setShortcut("Ctrl+Alt+C")
+    submenu.addAction(action)
 
+add_menu_action()
 
-editors = []
-def add_to_editors(editor)->None:
-    editor = editor.web
-    editors.append(editor)
-
-gui_hooks.editor_did_init_buttons.append(setupButtons)
-#gui_hooks.editor_did_init.append(setupLiveChanger)
-gui_hooks.editor_did_init.append(add_to_editors)
 
