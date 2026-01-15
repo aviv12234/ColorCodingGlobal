@@ -32,7 +32,7 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import showInfo, tooltip
+from aqt.utils import showInfo
 
 # -------------------------------------------------------------------
 # Paths & constants
@@ -41,7 +41,7 @@ ADDON_DIR = os.path.dirname(__file__)
 DATA_PATH = os.path.join(ADDON_DIR, "colorcoding_data.json")
 
 # -------------------------------------------------------------------
-# Add-on identity for config I/O (robust)
+# Add-on identity for config I/O
 # -------------------------------------------------------------------
 def _detect_addon_id() -> str:
     try:
@@ -76,17 +76,20 @@ def _write_cfg(cfg: dict) -> None:
 def _ensure_cfg_initialized() -> dict:
     cfg = _read_cfg()
     if "color_entries" not in cfg or not isinstance(cfg["color_entries"], list):
-        cfg["color_entries"] = [] 
+        cfg["color_entries"] = []
     if "bold_enabled" not in cfg:
-        cfg["bold_enabled"] = False
+        cfg["bold_enabled"] = True
     if "italic_enabled" not in cfg:
         cfg["italic_enabled"] = False
+    if "bold_plurals_enabled" not in cfg:
+        cfg["bold_plurals_enabled"] = True
+    if "colorize_enabled" not in cfg:
+        cfg["colorize_enabled"] = True
     _write_cfg(cfg)
-
     return cfg
 
 # -------------------------------------------------------------------
-# Color table storage: config (primary) + JSON fallback
+# Color table storage
 # -------------------------------------------------------------------
 def _load_entries_from_json() -> List[dict]:
     try:
@@ -103,7 +106,6 @@ def _save_entries_to_json(entries: List[dict]) -> None:
         with open(DATA_PATH, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
     except Exception:
-        # Silent fail to avoid UI noise; user still has config
         pass
 
 def get_color_table() -> Dict[str, str]:
@@ -118,7 +120,6 @@ def get_color_table() -> Dict[str, str]:
                 if w and c:
                     table[w] = c
         return table
-    # Fallback to JSON if config empty
     for row in _load_entries_from_json():
         if isinstance(row, dict):
             w = str(row.get("word", "")).strip()
@@ -141,35 +142,25 @@ def set_color_table_entries(entries: List[dict]) -> None:
     _save_entries_to_json(entries)
 
 # -------------------------------------------------------------------
-# Utility: Color parsing & swatch rendering
+# Utility: Color swatch rendering
 # -------------------------------------------------------------------
 def _qcolor_from_str(s: str) -> QColor:
-    """Return a QColor from '#RRGGBB' or named color; invalid -> transparent."""
-    if not s:
-        return QColor(Qt.GlobalColor.transparent)
     qc = QColor(s)
-    if not qc.isValid():
-        return QColor(Qt.GlobalColor.transparent)
-    return qc
+    return qc if qc.isValid() else QColor(Qt.GlobalColor.transparent)
 
 def _luminance(qc: QColor) -> float:
     r, g, b = qc.redF(), qc.greenF(), qc.blueF()
-    # sRGB relative luminance
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 def _set_color_cell_visual(item: QTableWidgetItem) -> None:
-    """Paint cell background with the color and choose readable text color."""
     if item is None:
         return
-    text = item.text().strip()
-    qc = _qcolor_from_str(text)
+    qc = _qcolor_from_str(item.text().strip())
     if not qc.isValid():
-        # Reset to default appearance if invalid
         item.setBackground(QColor(Qt.GlobalColor.transparent))
         item.setForeground(QColor(Qt.GlobalColor.black))
         return
     item.setBackground(qc)
-    # Choose black/white based on luminance
     fg = QColor(Qt.GlobalColor.black if _luminance(qc) > 0.6 else Qt.GlobalColor.white)
     item.setForeground(fg)
 
@@ -185,27 +176,17 @@ class ColorTableEditor(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Edit Color Table")
         self.resize(720, 460)
-
         self._suppress_item_changed = False
 
         main = QVBoxLayout(self)
+        main.addWidget(QLabel("Define words and their colors.\nColumns: Word, Color, Group."))
 
-        # Info
-        main.addWidget(
-            QLabel(
-                "Define words and their colors.\n"
-                "Columns: Word, Color (HTML name or HEX like #a5d8ff), Group (optional)."
-            )
-        )
-
-        # Table
         self.table = QTableWidget(self)
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Word", "Color", "Group"])
         self.table.horizontalHeader().setStretchLastSection(True)
         main.addWidget(self.table)
 
-        # Buttons: add/remove/pick
         row1 = QHBoxLayout()
         self.btn_add = QPushButton("Add row")
         self.btn_remove = QPushButton("Remove selected")
@@ -216,12 +197,11 @@ class ColorTableEditor(QDialog):
         row1.addStretch(1)
         main.addLayout(row1)
 
-        # Buttons: import/export/paste/copy
         row2 = QHBoxLayout()
         self.btn_import = QPushButton("Import JSON…")
         self.btn_export = QPushButton("Export JSON…")
-        self.btn_paste  = QPushButton("Paste JSON…")
-        self.btn_copy   = QPushButton("Copy JSON")
+        self.btn_paste = QPushButton("Paste JSON…")
+        self.btn_copy = QPushButton("Copy JSON")
         row2.addWidget(self.btn_import)
         row2.addWidget(self.btn_export)
         row2.addSpacing(16)
@@ -230,16 +210,14 @@ class ColorTableEditor(QDialog):
         row2.addStretch(1)
         main.addLayout(row2)
 
-        # Ok/Cancel
         okrow = QHBoxLayout()
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_save   = QPushButton("Save")
+        self.btn_save = QPushButton("Save")
         okrow.addStretch(1)
         okrow.addWidget(self.btn_cancel)
         okrow.addWidget(self.btn_save)
         main.addLayout(okrow)
 
-        # Wire
         self.btn_add.clicked.connect(self._add_row)
         self.btn_remove.clicked.connect(self._remove_selected)
         self.btn_pick.clicked.connect(self._pick_color_for_selected)
@@ -251,21 +229,17 @@ class ColorTableEditor(QDialog):
         self.btn_copy.clicked.connect(self._copy_json_to_clipboard)
         self.table.itemChanged.connect(self._on_item_changed)
 
-        # Load entries (from config, else JSON) and paint swatches
         self._load_entries(get_entries_for_editor())
         self._refresh_color_swatches()
 
-    # ---- helpers ----
     def _load_entries(self, entries: List[dict]):
         self._suppress_item_changed = True
         try:
             self.table.setRowCount(0)
-            if not isinstance(entries, list):
-                entries = []
             for row in entries:
                 if not isinstance(row, dict):
                     continue
-                word  = str(row.get("word", "")).strip()
+                word = str(row.get("word", "")).strip()
                 color = str(row.get("color", "")).strip()
                 group = str(row.get("group", "")).strip()
                 if word and color:
@@ -273,10 +247,10 @@ class ColorTableEditor(QDialog):
         finally:
             self._suppress_item_changed = False
 
-    def _append_row(self, word: str = "", color: str = "", group: str = ""):
+    def _append_row(self, word="", color="", group=""):
         r = self.table.rowCount()
         self.table.insertRow(r)
-        self.table.setItem(r, self.COL_WORD,  QTableWidgetItem(word))
+        self.table.setItem(r, self.COL_WORD, QTableWidgetItem(word))
         color_item = QTableWidgetItem(color)
         self.table.setItem(r, self.COL_COLOR, color_item)
         self.table.setItem(r, self.COL_GROUP, QTableWidgetItem(group))
@@ -290,10 +264,9 @@ class ColorTableEditor(QDialog):
     def _pick_color_for_selected(self):
         r = (self.table.selectedIndexes()[0].row() if self.table.selectedIndexes() else -1)
         if r < 0:
-            QMessageBox.information(self, "Pick color", "Select a row first.")
             return
         qcolor = QColorDialog.getColor()
-        if qcolor and qcolor.isValid():
+        if qcolor.isValid():
             item = self.table.item(r, self.COL_COLOR)
             if item is None:
                 item = QTableWidgetItem()
@@ -305,12 +278,12 @@ class ColorTableEditor(QDialog):
         self._append_row()
 
     def _collect_entries(self) -> List[dict]:
-        entries: List[dict] = []
+        entries = []
         for r in range(self.table.rowCount()):
             w = self.table.item(r, self.COL_WORD)
             c = self.table.item(r, self.COL_COLOR)
             g = self.table.item(r, self.COL_GROUP)
-            word  = (w.text() if w else "").strip()
+            word = (w.text() if w else "").strip()
             color = (c.text() if c else "").strip()
             group = (g.text() if g else "").strip()
             if word and color:
@@ -318,7 +291,6 @@ class ColorTableEditor(QDialog):
         return entries
 
     def _on_save(self):
-        # Commit any in-progress cell edits
         self.table.setFocus(Qt.FocusReason.OtherFocusReason)
         QApplication.processEvents()
         entries = self._collect_entries()
@@ -326,33 +298,28 @@ class ColorTableEditor(QDialog):
         self.accept()
 
     def _import_json(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import JSON", "", "JSON Files (*.json);;All Files (*)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Import JSON", "", "JSON Files (*.json);;All Files (*)")
         if not path:
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, list):
-                raise ValueError("JSON root must be a list of {word,group,color} objects")
-            self._load_entries(data)
-            self._refresh_color_swatches()
-        except Exception as e:
-            QMessageBox.critical(self, "Import JSON", f"Failed to import: {e}")
+            if isinstance(data, list):
+                self._load_entries(data)
+                self._refresh_color_swatches()
+        except Exception:
+            pass
 
     def _export_json(self):
         entries = self._collect_entries()
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export JSON", "colorcoding_data.json", "JSON Files (*.json);;All Files (*)"
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Export JSON", "colorcoding_data.json", "JSON Files (*.json);;All Files (*)")
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(entries, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            QMessageBox.critical(self, "Export JSON", f"Failed to save: {e}")
+        except Exception:
+            pass
 
     def _paste_json_dialog(self):
         dlg = QDialog(self)
@@ -360,7 +327,6 @@ class ColorTableEditor(QDialog):
         vbox = QVBoxLayout(dlg)
         vbox.addWidget(QLabel("Paste a JSON array of {word, group, color} objects:"))
         text = QPlainTextEdit(dlg)
-        text.setPlaceholderText('[{"word":"penicillin","group":"","color":"#ffcc99"}, ...]')
         text.setMinimumHeight(200)
         vbox.addWidget(text)
         btns = QHBoxLayout()
@@ -377,20 +343,16 @@ class ColorTableEditor(QDialog):
                 return
             try:
                 data = json.loads(raw)
-                if not isinstance(data, list):
-                    raise ValueError("JSON root must be a list")
-                self._load_entries(data)
-                self._refresh_color_swatches()
-                dlg.accept()
-            except Exception as e:
-                QMessageBox.critical(dlg, "Paste JSON", f"Invalid JSON:\n{e}")
+                if isinstance(data, list):
+                    self._load_entries(data)
+                    self._refresh_color_swatches()
+                    dlg.accept()
+            except Exception:
+                pass
 
         btn_cancel.clicked.connect(dlg.reject)
         btn_load.clicked.connect(do_load)
-        try:
-            dlg.exec()
-        except AttributeError:
-            dlg.exec_()
+        dlg.exec()
 
     def _copy_json_to_clipboard(self):
         entries = self._collect_entries()
@@ -398,7 +360,6 @@ class ColorTableEditor(QDialog):
         QGuiApplication.clipboard().setText(payload)
 
     def _refresh_color_swatches(self):
-        """Repaint all color cells based on their text."""
         self._suppress_item_changed = True
         try:
             for r in range(self.table.rowCount()):
@@ -415,26 +376,19 @@ class ColorTableEditor(QDialog):
             _set_color_cell_visual(item)
 
 # -------------------------------------------------------------------
-# Deck picker
+# Deck listing helper
 # -------------------------------------------------------------------
-def _multi_select_mode():
-    try:
-        return QAbstractItemView.SelectionMode.MultiSelection  # PyQt6
-    except AttributeError:
-        pass
-    try:
-        return Qt.SelectionMode.MultiSelection  # PyQt6 alt
-    except AttributeError:
-        pass
-    try:
-        return QAbstractItemView.MultiSelection  # PyQt5
-    except AttributeError:
-        pass
-    try:
-        return QAbstractItemView.SelectionMode.ExtendedSelection
-    except AttributeError:
-        return QAbstractItemView.ExtendedSelection
+def deck_names_with_children_flag() -> Dict[str, bool]:
+    decks = mw.col.decks.all_names_and_ids()
+    if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
+        return {name: True for (name, _id) in decks}
+    else:
+        names = [d["name"] for d in mw.col.decks.all()]
+        return {n: True for n in names}
 
+# -------------------------------------------------------------------
+# Deck picker with Bold/Italic/Plural/Colorize options
+# -------------------------------------------------------------------
 class DeckPickerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -445,7 +399,7 @@ class DeckPickerDialog(QDialog):
         layout.addWidget(QLabel("Select one or more decks:"))
 
         self.deck_list = QListWidget(self)
-        self.deck_list.setSelectionMode(_multi_select_mode())
+        self.deck_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         for d in sorted(deck_names_with_children_flag().keys()):
             self.deck_list.addItem(QListWidgetItem(d))
         layout.addWidget(self.deck_list)
@@ -459,28 +413,29 @@ class DeckPickerDialog(QDialog):
         self.whole_words_cb.setChecked(True)
         self.case_insensitive_cb = QCheckBox("Case insensitive", self)
         self.case_insensitive_cb.setChecked(True)
-        self.dry_run_cb = QCheckBox("Dry run (don’t modify—report only)", self)
-        self.dry_run_cb.setChecked(False)
 
-        # Bold/Italic (load last used values from config)
+        # Bold/Italic/Plural/Colorize (load last used values from config)
         cfg = _ensure_cfg_initialized()
         self.bold_cb = QCheckBox("Bold words", self)
-        self.bold_cb.setChecked(cfg.get("bold_enabled", False))
+        self.bold_cb.setChecked(cfg.get("bold_enabled", True))
         self.italic_cb = QCheckBox("Italic words", self)
         self.italic_cb.setChecked(cfg.get("italic_enabled", False))
-
-
+        self.bold_plurals_cb = QCheckBox('Match plural forms (add "s")', self)
+        self.bold_plurals_cb.setChecked(cfg.get("bold_plurals_enabled", True))
+        self.colorize_cb = QCheckBox('Colorize words (tick off for decolorization)', self)
+        self.colorize_cb.setChecked(cfg.get("colorize_enabled", True))
 
         for cb in [
             self.include_children_cb,
             self.skip_cloze_cb,
             self.whole_words_cb,
             self.case_insensitive_cb,
-            self.dry_run_cb,
             self.bold_cb,
             self.italic_cb,
-            ]:
-                layout.addWidget(cb)
+            self.bold_plurals_cb,
+            self.colorize_cb,
+        ]:
+            layout.addWidget(cb)
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -508,25 +463,17 @@ class DeckPickerDialog(QDialog):
     def case_insensitive(self) -> bool:
         return self.case_insensitive_cb.isChecked()
 
-    def dry_run(self) -> bool:
-        return self.dry_run_cb.isChecked()
-    
-    
-
     def bold_enabled(self) -> bool:
         return self.bold_cb.isChecked()
 
     def italic_enabled(self) -> bool:
         return self.italic_cb.isChecked()
 
+    def bold_plurals_enabled(self) -> bool:
+        return self.bold_plurals_cb.isChecked()
 
-def deck_names_with_children_flag() -> Dict[str, bool]:
-    decks = mw.col.decks.all_names_and_ids()
-    if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
-        return {name: True for (name, _id) in decks}
-    else:
-        names = [d["name"] for d in mw.col.decks.all()]
-        return {n: True for n in names}
+    def colorize_enabled(self) -> bool:
+        return self.colorize_cb.isChecked()
 
 # -------------------------------------------------------------------
 # Core coloring helpers
@@ -535,22 +482,50 @@ def deck_names_with_children_flag() -> Dict[str, bool]:
 class ColoringOptions:
     whole_words: bool = True
     case_insensitive: bool = True
-    bold: bool = False
+    bold: bool = True
     italic: bool = False
+    bold_plurals: bool = True
+    colorize: bool = True
 
 
 def build_combined_regex(color_table: Dict[str, str], opts: ColoringOptions) -> Tuple[re.Pattern, Dict[str, str]]:
+    """
+    Build one combined regex:
+      - If whole_words is True, use word boundaries.
+      - If plural matching is ON, also add <word>s alternation.
+      - If whole_words is False and plural matching is OFF, avoid matching when an 's' immediately follows
+        (so we don't color the stem inside plurals).
+    """
     words = sorted(color_table.keys(), key=len, reverse=True)
-    escaped = []
+    alts = []
+
     for w in words:
         ew = re.escape(w)
+
         if opts.whole_words:
-            ew = r"\b" + ew + r"\b"
-        escaped.append(ew)
-    pattern = "|".join(escaped) if escaped else r"(?!x)x"
+            # Exact word
+            alts.append(rf"\b{ew}\b")
+            if opts.bold_plurals:
+                # Match plural explicitly when enabled
+                alts.append(rf"\b{ew}s\b")
+        else:
+            if opts.bold_plurals:
+                # Non-word-boundary matching for both base and plural
+                alts.append(ew)          # base anywhere
+                alts.append(ew + r"s")   # plural anywhere
+            else:
+                # When plural matching is disabled and whole-words is off,
+                # avoid matching if an 's' immediately follows.
+                alts.append(ew + r"(?!s)")
+
+    pattern = "|".join(alts) if alts else r"(?!x)x"
     flags = re.IGNORECASE if opts.case_insensitive else 0
-    key_map = {k.lower() if opts.case_insensitive else k: v for k, v in color_table.items()}
+
+    key_map = { (k.lower() if opts.case_insensitive else k): v for k, v in color_table.items() }
     return re.compile(pattern, flags), key_map
+
+
+
 
 def apply_color_coding_to_html(
     html: str,
@@ -560,37 +535,77 @@ def apply_color_coding_to_html(
 ) -> Tuple[str, int]:
     if not html or not regex.pattern:
         return html, 0
+
+    # Remove previous wrappers so styles reflect current toggles (decolor/debold/deitalic)
+    html = re.sub(r'<span class="cc-color"[^>]*>(.*?)</span>', r'\1', html, flags=re.DOTALL | re.IGNORECASE)
+
     parts = re.split(r"(<[^>]+>)", html)
     changed = False
     total_replacements = 0
+
     def repl(m: re.Match) -> str:
         nonlocal total_replacements
         matched_text = m.group(0)
+
+        # Determine which color to use for this exact matched text
+        is_plural = False
         key = matched_text.lower() if opts.case_insensitive else matched_text
         color = key_to_color.get(key)
+
+        # If plural matching is on, allow base+‘s’ to pick the base color.
+        # If plural matching is off, we do NOT try this fallback (so plurals decolor).
+        if color is None and opts.bold_plurals and matched_text.lower().endswith("s"):
+            base = matched_text[:-1]
+            base_key = base.lower() if opts.case_insensitive else base
+            if base_key in key_to_color:
+                color = key_to_color[base_key]
+                is_plural = True
+
+        # Last chance, case-insensitive exact
         if color is None and opts.case_insensitive:
             color = key_to_color.get(matched_text.lower())
+
+        # No color mapping => no styling
         if color is None:
             return matched_text
-        total_replacements += 1
-        
-        style = f"color:{color};"
+
+        style_bits = []
+
+        # Color only if colorize is ON
+        if opts.colorize:
+            style_bits.append(f"color:{color};")
+
+        # Bold only if Bold toggle is ON (plural does not override — plural only affects matching)
         if opts.bold:
-            style += " font-weight:bold;"
+            style_bits.append("font-weight:bold;")
+
+        # Italic only if Italic toggle is ON
         if opts.italic:
-            style += " font-style:italic;"
+            style_bits.append("font-style:italic;")
+
+        # If no style to apply (e.g., all toggles OFF), return as-is
+        if not style_bits:
+            return matched_text
+
+        total_replacements += 1
+        style = " ".join(style_bits)
         return f'<span class="cc-color" style="{style}">{matched_text}</span>'
 
     for i, chunk in enumerate(parts):
+        # Only operate on text chunks (even indices). Skip if already contains our span (shouldn't after normalization).
         if i % 2 == 0 and chunk and "cc-color" not in chunk:
             new_chunk, n = regex.subn(repl, chunk)
             if n:
                 changed = True
                 parts[i] = new_chunk
+
     if not changed:
         return html, 0
-    new_html = "".join(parts)
-    return new_html, total_replacements
+    return "".join(parts), total_replacements
+
+
+
+    # Remove previous
 
 def note_is_cloze(note) -> bool:
     mt = note.note_type()
@@ -608,7 +623,6 @@ def color_notes_in_decks(
     include_children: bool,
     skip_cloze: bool,
     opts: ColoringOptions,
-    dry_run: bool,
 ) -> Tuple[int, int, int]:
     color_table = get_color_table()
     if not color_table:
@@ -649,26 +663,26 @@ def color_notes_in_decks(
 
             modified = False
             replacements_for_note = 0
+
+            # NEW (save normalization-only changes too)
             for fname in note.keys():
                 original = note[fname]
                 new_val, num = apply_color_coding_to_html(original, regex, key_to_color, opts)
-                if num > 0 and new_val != original:
-                    if not dry_run:
-                        note[fname] = new_val
+                if new_val != original:  # <- remove the num > 0 gate
+                    note[fname] = new_val
                     modified = True
                     replacements_for_note += num
+
 
             if modified:
                 notes_modified += 1
                 total_replacements += replacements_for_note
-                if not dry_run:
-                    note.flush()
+                note.flush()
 
             if idx % 200 == 0:
                 mw.progress.update(label=f"Processing notes… ({idx+1}/{len(nids)})")
 
-        if not dry_run:
-            mw.reset()  # refresh UI
+        mw.reset()  # refresh UI
 
     finally:
         mw.progress.finish()
@@ -711,17 +725,17 @@ def on_apply_to_selected_decks():
         case_insensitive=dlg.case_insensitive(),
         bold=dlg.bold_enabled(),
         italic=dlg.italic_enabled(),
-
+        bold_plurals=dlg.bold_plurals_enabled(),
+        colorize=dlg.colorize_enabled(),
     )
-    dry_run = dlg.dry_run()
-    
 
-    # Remember Bold/Italic preferences for next time
+    # Remember preferences for next time
     cfg = _ensure_cfg_initialized()
     cfg["bold_enabled"] = dlg.bold_enabled()
     cfg["italic_enabled"] = dlg.italic_enabled()
+    cfg["bold_plurals_enabled"] = dlg.bold_plurals_enabled()
+    cfg["colorize_enabled"] = dlg.colorize_enabled()
     _write_cfg(cfg)
-
 
     try:
         notes_seen, notes_modified, total_replacements = color_notes_in_decks(
@@ -729,32 +743,19 @@ def on_apply_to_selected_decks():
             include_children=include_children,
             skip_cloze=skip_cloze,
             opts=opts,
-            dry_run=dry_run,
         )
     except Exception as e:
         QMessageBox.critical(mw, "Color Coding – Error", f"{type(e).__name__}: {e}")
         return
 
-    if dry_run:
-        showInfo(
-            f"Dry run complete.\n\n"
-            f"Decks: {', '.join(decks)}\n"
-            f"Include subdecks: {'Yes' if include_children else 'No'}\n"
-            f"Notes scanned: {notes_seen}\n"
-            f"Notes that would change: {notes_modified}\n"
-            f"Total word matches: {total_replacements}\n"
-            f"(No notes were modified.)"
-        )
-    else:
-        showInfo(
-            f"Color coding complete.\n\n"
-            f"Decks: {', '.join(decks)}\n"
-            f"Include subdecks: {'Yes' if include_children else 'No'}\n"
-            f"Notes scanned: {notes_seen}\n"
-            f"Notes modified: {notes_modified}\n"
-            f"Total replacements made: {total_replacements}\n"
-            f"You can undo via Edit → Undo (Color Coding Global)."
-        )
+    showInfo(
+        f"Color coding complete.\n\n"
+        f"Decks: {', '.join(decks)}\n"
+        f"Include subdecks: {'Yes' if include_children else 'No'}\n"
+        f"Notes scanned: {notes_seen}\n"
+        f"Notes modified: {notes_modified}\n"
+        f"Total replacements: {total_replacements}"
+    )
 
 def on_edit_color_table():
     try:
@@ -776,7 +777,7 @@ def add_menu_action():
     submenu.addAction(action_edit)
 
 # -------------------------------------------------------------------
-# Initialize AFTER main window is fully ready (Anki 25.x: no args)
+# Initialize AFTER main window is ready
 # -------------------------------------------------------------------
 def _on_main_window_ready():
     _ensure_cfg_initialized()

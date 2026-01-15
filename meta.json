@@ -1,1 +1,1 @@
-{"name": "Color Coding Global (Dev)", "config": {"color_entries": [], "bold_enabled": false, "italic_enabled": false}}
+{"name": "Color Coding Global (Dev)", "config": {"color_entries": [], "bold_enabled": true, "italic_enabled": false, "bold_plurals_enabled": true, "colorize_enabled": true}}
