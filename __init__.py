@@ -449,7 +449,7 @@ class DeckPickerDialog(QDialog):
         self.include_children_cb = QCheckBox("Include subdecks", self)
         self.include_children_cb.setChecked(True)
         self.skip_cloze_cb = QCheckBox("Skip Cloze models", self)
-        self.skip_cloze_cb.setChecked(True)
+        self.skip_cloze_cb.setChecked(False)
         self.whole_words_cb = QCheckBox("Whole words only", self)
         self.whole_words_cb.setChecked(True)
         self.case_insensitive_cb = QCheckBox("Case insensitive", self)
