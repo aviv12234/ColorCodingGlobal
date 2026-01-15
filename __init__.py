@@ -76,8 +76,13 @@ def _write_cfg(cfg: dict) -> None:
 def _ensure_cfg_initialized() -> dict:
     cfg = _read_cfg()
     if "color_entries" not in cfg or not isinstance(cfg["color_entries"], list):
-        cfg["color_entries"] = []
-        _write_cfg(cfg)
+        cfg["color_entries"] = [] 
+    if "bold_enabled" not in cfg:
+        cfg["bold_enabled"] = False
+    if "italic_enabled" not in cfg:
+        cfg["italic_enabled"] = False
+    _write_cfg(cfg)
+
     return cfg
 
 # -------------------------------------------------------------------
@@ -457,14 +462,25 @@ class DeckPickerDialog(QDialog):
         self.dry_run_cb = QCheckBox("Dry run (don’t modify—report only)", self)
         self.dry_run_cb.setChecked(False)
 
+        # Bold/Italic (load last used values from config)
+        cfg = _ensure_cfg_initialized()
+        self.bold_cb = QCheckBox("Bold words", self)
+        self.bold_cb.setChecked(cfg.get("bold_enabled", False))
+        self.italic_cb = QCheckBox("Italic words", self)
+        self.italic_cb.setChecked(cfg.get("italic_enabled", False))
+
+
+
         for cb in [
             self.include_children_cb,
             self.skip_cloze_cb,
             self.whole_words_cb,
             self.case_insensitive_cb,
             self.dry_run_cb,
-        ]:
-            layout.addWidget(cb)
+            self.bold_cb,
+            self.italic_cb,
+            ]:
+                layout.addWidget(cb)
 
         # Buttons
         btn_row = QHBoxLayout()
@@ -494,6 +510,15 @@ class DeckPickerDialog(QDialog):
 
     def dry_run(self) -> bool:
         return self.dry_run_cb.isChecked()
+    
+    
+
+    def bold_enabled(self) -> bool:
+        return self.bold_cb.isChecked()
+
+    def italic_enabled(self) -> bool:
+        return self.italic_cb.isChecked()
+
 
 def deck_names_with_children_flag() -> Dict[str, bool]:
     decks = mw.col.decks.all_names_and_ids()
@@ -510,6 +535,9 @@ def deck_names_with_children_flag() -> Dict[str, bool]:
 class ColoringOptions:
     whole_words: bool = True
     case_insensitive: bool = True
+    bold: bool = False
+    italic: bool = False
+
 
 def build_combined_regex(color_table: Dict[str, str], opts: ColoringOptions) -> Tuple[re.Pattern, Dict[str, str]]:
     words = sorted(color_table.keys(), key=len, reverse=True)
@@ -545,7 +573,14 @@ def apply_color_coding_to_html(
         if color is None:
             return matched_text
         total_replacements += 1
-        return f'<span class="cc-color" style="color:{color}">{matched_text}</span>'
+        
+        style = f"color:{color};"
+        if opts.bold:
+            style += " font-weight:bold;"
+        if opts.italic:
+            style += " font-style:italic;"
+        return f'<span class="cc-color" style="{style}">{matched_text}</span>'
+
     for i, chunk in enumerate(parts):
         if i % 2 == 0 and chunk and "cc-color" not in chunk:
             new_chunk, n = regex.subn(repl, chunk)
@@ -674,8 +709,19 @@ def on_apply_to_selected_decks():
     opts = ColoringOptions(
         whole_words=dlg.whole_words(),
         case_insensitive=dlg.case_insensitive(),
+        bold=dlg.bold_enabled(),
+        italic=dlg.italic_enabled(),
+
     )
     dry_run = dlg.dry_run()
+    
+
+    # Remember Bold/Italic preferences for next time
+    cfg = _ensure_cfg_initialized()
+    cfg["bold_enabled"] = dlg.bold_enabled()
+    cfg["italic_enabled"] = dlg.italic_enabled()
+    _write_cfg(cfg)
+
 
     try:
         notes_seen, notes_modified, total_replacements = color_notes_in_decks(
