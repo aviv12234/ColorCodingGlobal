@@ -85,6 +85,10 @@ def _ensure_cfg_initialized() -> dict:
         cfg["bold_plurals_enabled"] = True
     if "colorize_enabled" not in cfg:
         cfg["colorize_enabled"] = True
+    if "whole_words" not in cfg:
+        cfg["whole_words"] = True
+    if "case_insensitive" not in cfg:
+        cfg["case_insensitive"] = True
     _write_cfg(cfg)
     return cfg
 
@@ -109,6 +113,10 @@ def _save_entries_to_json(entries: List[dict]) -> None:
         pass
 
 def get_color_table() -> Dict[str, str]:
+    """
+    Build {word -> color} from config editor entries.
+    Each entry: {"word": "...", "group": "...", "color": "#..."}
+    """
     table: Dict[str, str] = {}
     cfg = _ensure_cfg_initialized()
     entries = cfg.get("color_entries", [])
@@ -120,6 +128,8 @@ def get_color_table() -> Dict[str, str]:
                 if w and c:
                     table[w] = c
         return table
+
+    # Fallback: legacy JSON file next to the add-on
     for row in _load_entries_from_json():
         if isinstance(row, dict):
             w = str(row.get("word", "")).strip()
@@ -175,11 +185,11 @@ class ColorTableEditor(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Color Table")
-        self.resize(720, 460)
+        self.resize(780, 540)
         self._suppress_item_changed = False
 
         main = QVBoxLayout(self)
-        main.addWidget(QLabel("Define words and their colors.\nColumns: Word, Color, Group."))
+        main.addWidget(QLabel("Define words/terms and their colors.\nColumns: Word, Color, Group."))
 
         self.table = QTableWidget(self)
         self.table.setColumnCount(3)
@@ -201,11 +211,13 @@ class ColorTableEditor(QDialog):
         self.btn_import = QPushButton("Import JSON…")
         self.btn_export = QPushButton("Export JSON…")
         self.btn_paste = QPushButton("Paste JSON…")
+        self.btn_append_paste = QPushButton("Append JSON…")  # NEW: non-destructive
         self.btn_copy = QPushButton("Copy JSON")
         row2.addWidget(self.btn_import)
         row2.addWidget(self.btn_export)
         row2.addSpacing(16)
         row2.addWidget(self.btn_paste)
+        row2.addWidget(self.btn_append_paste)  # NEW
         row2.addWidget(self.btn_copy)
         row2.addStretch(1)
         main.addLayout(row2)
@@ -226,6 +238,7 @@ class ColorTableEditor(QDialog):
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_save.clicked.connect(self._on_save)
         self.btn_paste.clicked.connect(self._paste_json_dialog)
+        self.btn_append_paste.clicked.connect(self._append_json_dialog)  # NEW
         self.btn_copy.clicked.connect(self._copy_json_to_clipboard)
         self.table.itemChanged.connect(self._on_item_changed)
 
@@ -262,7 +275,8 @@ class ColorTableEditor(QDialog):
             self.table.removeRow(r)
 
     def _pick_color_for_selected(self):
-        r = (self.table.selectedIndexes()[0].row() if self.table.selectedIndexes() else -1)
+        idxs = self.table.selectedIndexes()
+        r = (idxs[0].row() if idxs else -1)
         if r < 0:
             return
         qcolor = QColorDialog.getColor()
@@ -323,7 +337,7 @@ class ColorTableEditor(QDialog):
 
     def _paste_json_dialog(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("Paste JSON")
+        dlg.setWindowTitle("Paste JSON (replace entire table)")
         vbox = QVBoxLayout(dlg)
         vbox.addWidget(QLabel("Paste a JSON array of {word, group, color} objects:"))
         text = QPlainTextEdit(dlg)
@@ -347,11 +361,92 @@ class ColorTableEditor(QDialog):
                     self._load_entries(data)
                     self._refresh_color_swatches()
                     dlg.accept()
-            except Exception:
-                pass
+            except Exception as e:
+                QMessageBox.critical(self, "Paste JSON – Error", f"{type(e).__name__}: {e}")
 
         btn_cancel.clicked.connect(dlg.reject)
         btn_load.clicked.connect(do_load)
+        dlg.exec()
+
+    # --- NEW: non-destructive append of pasted JSON entries ---
+    def _append_entries(self, incoming: List[dict]) -> Tuple[int, int]:
+        """
+        Merge 'incoming' entries into the current table without replacing the whole table.
+        Duplicate policy: if a 'word' already exists, SKIP it (keep existing).
+        Returns (added_count, skipped_count).
+        """
+        existing_words = set()
+        for r in range(self.table.rowCount()):
+            w_item = self.table.item(r, self.COL_WORD)
+            word = (w_item.text() if w_item else "").strip()
+            if word:
+                existing_words.add(word)
+
+        added = 0
+        skipped = 0
+        for row in incoming:
+            if not isinstance(row, dict):
+                continue
+            word = str(row.get("word", "")).strip()
+            color = str(row.get("color", "")).strip()
+            group = str(row.get("group", "")).strip()
+            if not (word and color):
+                continue
+
+            if word in existing_words:
+                skipped += 1
+                # OVERWRITE policy (optional):
+                # If you prefer to update existing entries instead of skipping,
+                # replace this block with code that finds the row and updates color/group.
+                continue
+
+            self._append_row(word, color, group)
+            existing_words.add(word)
+            added += 1
+
+        return added, skipped
+
+    def _append_json_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Append JSON (merge without replacing)")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel(
+            "Paste a JSON array of {word, group, color} objects.\n"
+            "Existing words are kept; only new words are added."
+        ))
+        text = QPlainTextEdit(dlg)
+        text.setMinimumHeight(200)
+        vbox.addWidget(text)
+
+        btns = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel", dlg)
+        btn_append = QPushButton("Append", dlg)
+        btns.addStretch(1)
+        btns.addWidget(btn_cancel)
+        btns.addWidget(btn_append)
+        vbox.addLayout(btns)
+
+        def do_append():
+            raw = text.toPlainText().strip()
+            if not raw:
+                return
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    added, skipped = self._append_entries(data)
+                    self._refresh_color_swatches()
+                    QMessageBox.information(
+                        self,
+                        "Append JSON",
+                        f"Appended {added} new entr{'y' if added == 1 else 'ies'}.\n"
+                        f"Skipped {skipped} duplicate{'s' if skipped != 1 else ''}."
+                    )
+                    dlg.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "Append JSON – Error", f"{type(e).__name__}: {e}")
+
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_append.clicked.connect(do_append)
         dlg.exec()
 
     def _copy_json_to_clipboard(self):
@@ -379,21 +474,29 @@ class ColorTableEditor(QDialog):
 # Deck listing helper
 # -------------------------------------------------------------------
 def deck_names_with_children_flag() -> Dict[str, bool]:
-    decks = mw.col.decks.all_names_and_ids()
-    if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
-        return {name: True for (name, _id) in decks}
-    else:
-        names = [d["name"] for d in mw.col.decks.all()]
+    """
+    Return {deck_name: True} for all decks. Compatible across Anki versions.
+    """
+    try:
+        decks = mw.col.decks.all_names_and_ids()  # modern Anki
+        if isinstance(decks, list) and decks and isinstance(decks[0], tuple):
+            return {name: True for (name, _id) in decks}
+    except Exception:
+        pass
+    try:
+        names = [d["name"] for d in mw.col.decks.all()]  # older fallback
         return {n: True for n in names}
+    except Exception:
+        return {}
 
 # -------------------------------------------------------------------
-# Deck picker with Bold/Italic/Plural/Colorize options
+# Deck picker with Bold/Italic/Plural/Colorize/Whole/Case options
 # -------------------------------------------------------------------
 class DeckPickerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Apply Color Coding to Selected Decks")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Select one or more decks:"))
@@ -409,20 +512,21 @@ class DeckPickerDialog(QDialog):
         self.include_children_cb.setChecked(True)
         self.skip_cloze_cb = QCheckBox("Skip Cloze models", self)
         self.skip_cloze_cb.setChecked(False)
-        self.whole_words_cb = QCheckBox("Whole words only", self)
-        self.whole_words_cb.setChecked(True)
-        self.case_insensitive_cb = QCheckBox("Case insensitive", self)
-        self.case_insensitive_cb.setChecked(True)
 
-        # Bold/Italic/Plural/Colorize (load last used values from config)
         cfg = _ensure_cfg_initialized()
+        self.whole_words_cb = QCheckBox("Whole words only", self)
+        self.whole_words_cb.setChecked(cfg.get("whole_words", True))
+        self.case_insensitive_cb = QCheckBox("Case insensitive", self)
+        self.case_insensitive_cb.setChecked(cfg.get("case_insensitive", True))
+
+        # Style toggles
         self.bold_cb = QCheckBox("Bold words", self)
         self.bold_cb.setChecked(cfg.get("bold_enabled", True))
         self.italic_cb = QCheckBox("Italic words", self)
         self.italic_cb.setChecked(cfg.get("italic_enabled", False))
-        self.bold_plurals_cb = QCheckBox('Match plural forms (add "s")', self)
+        self.bold_plurals_cb = QCheckBox('Match plural forms (last token only)', self)
         self.bold_plurals_cb.setChecked(cfg.get("bold_plurals_enabled", True))
-        self.colorize_cb = QCheckBox('Colorize words (tick off for decolorization)', self)
+        self.colorize_cb = QCheckBox('Colorize words (turn off to decolor)', self)
         self.colorize_cb.setChecked(cfg.get("colorize_enabled", True))
 
         for cb in [
@@ -444,6 +548,8 @@ class DeckPickerDialog(QDialog):
         self.run_btn.clicked.connect(self.accept)
         self.cancel_btn.clicked.connect(self.reject)
         btn_row.addStretch(1)
+        self.cancel_btn.setDefault(False)
+        self.run_btn.setDefault(True)
         btn_row.addWidget(self.cancel_btn)
         btn_row.addWidget(self.run_btn)
         layout.addLayout(btn_row)
@@ -476,7 +582,7 @@ class DeckPickerDialog(QDialog):
         return self.colorize_cb.isChecked()
 
 # -------------------------------------------------------------------
-# Core coloring helpers
+# Core coloring helpers (PERMANENT multi-word fix + longest-first priority)
 # -------------------------------------------------------------------
 @dataclass
 class ColoringOptions:
@@ -484,132 +590,198 @@ class ColoringOptions:
     case_insensitive: bool = True
     bold: bool = True
     italic: bool = False
-    bold_plurals: bool = True
+    bold_plurals: bool = True  # "Match plural forms" toggle
     colorize: bool = True
 
+# --- Helpers for multi-word & plural support (no term lists) ---
+_CAMEL_TOKEN_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+
+# Flexible separators allowed between tokens on cards:
+# space, &nbsp;, hyphen, slash, en dash, em dash, or a simple inline HTML tag
+_SEP_RE = r"(?:\s|&nbsp;|[-/]|–|—|<[^>]+?>)+"
+
+def _tokenize_term(term: str) -> List[str]:
+    """
+    Split a color-table key into tokens:
+      - If it contains spaces/underscores/hyphens -> split on those
+      - Else -> split CamelCase into tokens
+    """
+    if re.search(r"[\s_\-]", term):
+        raw = re.split(r"[\s_\-]+", term)
+        return [t for t in raw if t]
+    return _CAMEL_TOKEN_RE.findall(term)
+
+def _plural_last_token_pattern(base: str, case_insensitive: bool) -> str:
+    """
+    Return a regex that matches a token's singular and common plural variants by RULES (no word lists).
+    Rules applied in order (classical + English):
+      - us -> i        (nucleus->nuclei)
+      - um -> a        (septum->septa)
+      - on -> a        (ganglion->ganglia)
+      - is -> es       (anastomosis->anastomoses)
+      - ex/ix -> ices  (cortex/index->cortices/indices)
+      - ma -> mata     (stoma->stomata)
+      - men -> mina    (foramen->foramina)
+      - x -> ces       (thorax->thoraces)
+      - [^aeiou]y -> ies  (artery->arteries)
+      - (s|x|z|ch|sh) -> +es
+      - default -> +s
+    """
+    b = base.lower() if case_insensitive else base
+    cand = [base]
+
+    if re.search(r"us$", b):
+        cand.append(base[:-2] + "i")
+    elif re.search(r"um$", b):
+        cand.append(base[:-2] + "a")
+    elif re.search(r"on$", b):
+        cand.append(base[:-2] + "a")
+    elif re.search(r"(?:ex|ix)$", b):
+        cand.append(base[:-2] + "ices")
+    elif re.search(r"is$", b):
+        cand.append(base[:-2] + "es")
+    elif re.search(r"ma$", b):
+        cand.append(base[:-2] + "mata")
+    elif re.search(r"men$", b):
+        cand.append(base[:-3] + "mina")
+    elif re.search(r"x$", b):
+        cand.append(base[:-1] + "ces")
+    elif re.search(r"[^aeiou]y$", b):
+        cand.append(base[:-1] + "ies")
+    elif re.search(r"(s|x|z|ch|sh)$", b):
+        cand.append(base + "es")
+    else:
+        cand.append(base + "s")
+
+    alts = "|".join(re.escape(c) for c in cand)
+    return f"(?:{alts})"
 
 def build_combined_regex(color_table: Dict[str, str], opts: ColoringOptions) -> Tuple[re.Pattern, Dict[str, str]]:
     """
-    Build one combined regex:
-      - If whole_words is True, use word boundaries.
-      - If plural matching is ON, also add <word>s alternation.
-      - If whole_words is False and plural matching is OFF, avoid matching when an 's' immediately follows
-        (so we don't color the stem inside plurals).
+    Build one combined regex with named groups (k0, k1, ...) for each table key, supporting:
+      - multi-word (spaced) matching from CamelCase/snake_case/hyphenated/space keys,
+      - flexible separators on cards (spaces, &nbsp;, hyphen, slash, en/em dash, simple HTML tags),
+      - pluralization of the LAST token when enabled,
+      - whole-words behavior per token (when whole_words=True),
+      - LONGEST-FIRST PRIORITY so specific phrases beat generic tokens.
+    Returns: (compiled_regex, groupname_to_color)
     """
-    words = sorted(color_table.keys(), key=len, reverse=True)
-    alts = []
+    alts: List[str] = []
+    group_to_color: Dict[str, str] = {}
 
-    for w in words:
-        ew = re.escape(w)
+    # --- Pre-tokenize and sort: longer/specific first ---
+    tmp: List[Tuple[List[str], str, str]] = []  # (tokens, key, color)
+    for key, color in color_table.items():
+        tokens = _tokenize_term(key)
+        if tokens:
+            tmp.append((tokens, key, color))
 
-        if opts.whole_words:
-            # Exact word
-            alts.append(rf"\b{ew}\b")
-            if opts.bold_plurals:
-                # Match plural explicitly when enabled
-                alts.append(rf"\b{ew}s\b")
-        else:
-            if opts.bold_plurals:
-                # Non-word-boundary matching for both base and plural
-                alts.append(ew)          # base anywhere
-                alts.append(ew + r"s")   # plural anywhere
+    # Sort by: (1) token count desc, (2) total chars desc
+    tmp.sort(key=lambda t: (len(t[0]), sum(len(tok) for tok in t[0])), reverse=True)
+    # -----------------------------------------------------
+
+    i = 0
+    for tokens, key, color in tmp:
+        def tok_piece(tok: str, is_last: bool) -> str:
+            if is_last and opts.bold_plurals:
+                last_core = _plural_last_token_pattern(tok, opts.case_insensitive)
             else:
-                # When plural matching is disabled and whole-words is off,
-                # avoid matching if an 's' immediately follows.
-                alts.append(ew + r"(?!s)")
+                last_core = re.escape(tok)
+
+            if opts.whole_words:
+                if is_last:
+                    return rf"\b{last_core}\b"
+                else:
+                    return rf"\b{re.escape(tok)}\b"
+            else:
+                if is_last and not opts.bold_plurals and len(tokens) == 1:
+                    # avoid matching stem just before trivial plural "s"
+                    return rf"{re.escape(tok)}(?!s)"
+                if is_last:
+                    return last_core
+                return re.escape(tok)
+
+        if len(tokens) == 1:
+            entry_pat = tok_piece(tokens[0], True)
+        else:
+            parts = [tok_piece(t, False) for t in tokens[:-1]]
+            parts.append(tok_piece(tokens[-1], True))
+            entry_pat = _SEP_RE.join(parts)
+
+        gname = f"k{i}"
+        alts.append(f"(?P<{gname}>{entry_pat})")
+        group_to_color[gname] = color
+        i += 1
 
     pattern = "|".join(alts) if alts else r"(?!x)x"
     flags = re.IGNORECASE if opts.case_insensitive else 0
-
-    key_map = { (k.lower() if opts.case_insensitive else k): v for k, v in color_table.items() }
-    return re.compile(pattern, flags), key_map
-
-
-
+    return re.compile(pattern, flags), group_to_color
 
 def apply_color_coding_to_html(
     html: str,
     regex: re.Pattern,
-    key_to_color: Dict[str, str],
+    group_to_color: Dict[str, str],
     opts: ColoringOptions,
 ) -> Tuple[str, int]:
     if not html or not regex.pattern:
         return html, 0
 
-    # Remove previous wrappers so styles reflect current toggles (decolor/debold/deitalic)
-    html = re.sub(r'<span class="cc-color"[^>]*>(.*?)</span>', r'\1', html, flags=re.DOTALL | re.IGNORECASE)
+    # Normalize first: strip old wrappers so toggles reflect current state
+    html = re.sub(
+        r'<span class="cc-color"[^>]*>(.*?)</span>',
+        r'\1',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
 
-    parts = re.split(r"(<[^>]+>)", html)
+    parts = re.split(r"(<[^>]+>)", html)  # split into text/tag chunks
     changed = False
-    total_replacements = 0
+    total = 0
 
     def repl(m: re.Match) -> str:
-        nonlocal total_replacements
-        matched_text = m.group(0)
-
-        # Determine which color to use for this exact matched text
-        is_plural = False
-        key = matched_text.lower() if opts.case_insensitive else matched_text
-        color = key_to_color.get(key)
-
-        # If plural matching is on, allow base+‘s’ to pick the base color.
-        # If plural matching is off, we do NOT try this fallback (so plurals decolor).
-        if color is None and opts.bold_plurals and matched_text.lower().endswith("s"):
-            base = matched_text[:-1]
-            base_key = base.lower() if opts.case_insensitive else base
-            if base_key in key_to_color:
-                color = key_to_color[base_key]
-                is_plural = True
-
-        # Last chance, case-insensitive exact
-        if color is None and opts.case_insensitive:
-            color = key_to_color.get(matched_text.lower())
-
-        # No color mapping => no styling
-        if color is None:
-            return matched_text
+        nonlocal total
+        gname = m.lastgroup
+        if not gname:
+            return m.group(0)
+        color = group_to_color.get(gname)
+        if not color:
+            return m.group(0)
 
         style_bits = []
-
-        # Color only if colorize is ON
         if opts.colorize:
             style_bits.append(f"color:{color};")
-
-        # Bold only if Bold toggle is ON (plural does not override — plural only affects matching)
         if opts.bold:
             style_bits.append("font-weight:bold;")
-
-        # Italic only if Italic toggle is ON
         if opts.italic:
             style_bits.append("font-style:italic;")
 
-        # If no style to apply (e.g., all toggles OFF), return as-is
         if not style_bits:
-            return matched_text
+            return m.group(0)
 
-        total_replacements += 1
+        total += 1
         style = " ".join(style_bits)
-        return f'<span class="cc-color" style="{style}">{matched_text}</span>'
+        return f'<span class="cc-color" style="{style}">{m.group(0)}</span>'
 
     for i, chunk in enumerate(parts):
-        # Only operate on text chunks (even indices). Skip if already contains our span (shouldn't after normalization).
         if i % 2 == 0 and chunk and "cc-color" not in chunk:
             new_chunk, n = regex.subn(repl, chunk)
             if n:
-                changed = True
                 parts[i] = new_chunk
+                changed = True
 
     if not changed:
         return html, 0
-    return "".join(parts), total_replacements
+    return "".join(parts), total
 
-
-
-    # Remove previous
-
+# -------------------------------------------------------------------
+# Other helpers
+# -------------------------------------------------------------------
 def note_is_cloze(note) -> bool:
-    mt = note.note_type()
-    return (mt.get("type") == 1) or ("Cloze" in (mt.get("name") or ""))
+    try:
+        mt = note.note_type()
+        return (mt.get("type") == 1) or ("Cloze" in (mt.get("name") or ""))
+    except Exception:
+        return False
 
 def quote_deck_for_search(deck_name: str) -> str:
     safe = deck_name.replace('"', '\\"')
@@ -627,7 +799,7 @@ def color_notes_in_decks(
     color_table = get_color_table()
     if not color_table:
         raise RuntimeError("Color table is empty. Configure your color mappings first.")
-    regex, key_to_color = build_combined_regex(color_table, opts)
+    regex, group_to_color = build_combined_regex(color_table, opts)
 
     notes_seen = 0
     notes_modified = 0
@@ -664,15 +836,14 @@ def color_notes_in_decks(
             modified = False
             replacements_for_note = 0
 
-            # NEW (save normalization-only changes too)
             for fname in note.keys():
                 original = note[fname]
-                new_val, num = apply_color_coding_to_html(original, regex, key_to_color, opts)
-                if new_val != original:  # <- remove the num > 0 gate
+                new_val, num = apply_color_coding_to_html(original, regex, group_to_color, opts)
+                # Save even if only normalization changed
+                if new_val != original:
                     note[fname] = new_val
                     modified = True
                     replacements_for_note += num
-
 
             if modified:
                 notes_modified += 1
@@ -735,6 +906,8 @@ def on_apply_to_selected_decks():
     cfg["italic_enabled"] = dlg.italic_enabled()
     cfg["bold_plurals_enabled"] = dlg.bold_plurals_enabled()
     cfg["colorize_enabled"] = dlg.colorize_enabled()
+    cfg["whole_words"] = dlg.whole_words()
+    cfg["case_insensitive"] = dlg.case_insensitive()
     _write_cfg(cfg)
 
     try:
