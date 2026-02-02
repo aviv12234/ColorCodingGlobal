@@ -8238,5 +8238,275 @@
     "word": "LaminaX",
     "group": "SpinalCord",
     "color": "#FFEFE0"
+  },
+  {
+    "word": "VoltageGated",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "LeakChannel",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "Conductance",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "Permeability",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "EquilibriumPotential",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "Nernst",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "Goldman",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "InactivationGate",
+    "group": "neurophysiology",
+    "color": "#B2E4DF"
+  },
+  {
+    "word": "Depolarization",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "Repolarization",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "Hyperpolarization",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "ThresholdPotential",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "Afterhyperpolarization",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "Refractory",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "Saltatory",
+    "group": "neurophysiology",
+    "color": "#F7D7AE"
+  },
+  {
+    "word": "SynapticVesicle",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "SNARE",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Synaptotagmin",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Quantal",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Summation",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Potentiation",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Depression",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Hebbian",
+    "group": "neurophysiology",
+    "color": "#D7C9F7"
+  },
+  {
+    "word": "Mechanoreceptor",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Proprioceptor",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Nociceptor",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Baroreceptor",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Phototransduction",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Rhodopsin",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "Opsin",
+    "group": "neurophysiology",
+    "color": "#CFECC5"
+  },
+  {
+    "word": "MotorUnit",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "SpindleFiber",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "GolgiTendon",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "Feedforward",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "FeedbackControl",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "Corticospinal",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "BasalGanglia",
+    "group": "neurophysiology",
+    "color": "#F8E7A1"
+  },
+  {
+    "word": "Purkinje",
+    "group": "neurophysiology",
+    "color": "#F6CEC3"
+  },
+  {
+    "word": "MossyFiber",
+    "group": "neurophysiology",
+    "color": "#F6CEC3"
+  },
+  {
+    "word": "ClimbingFiber",
+    "group": "neurophysiology",
+    "color": "#F6CEC3"
+  },
+  {
+    "word": "DeepNuclei",
+    "group": "neurophysiology",
+    "color": "#F6CEC3"
+  },
+  {
+    "word": "Vestibulocerebellar",
+    "group": "neurophysiology",
+    "color": "#F6CEC3"
+  },
+  {
+    "word": "Transduction",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "Transmission",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "Modulation",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "Perception",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "Hyperalgesia",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "Allodynia",
+    "group": "neurophysiology",
+    "color": "#F4C4CF"
+  },
+  {
+    "word": "DeltaWave",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
+  },
+  {
+    "word": "ThetaWave",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
+  },
+  {
+    "word": "AlphaWave",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
+  },
+  {
+    "word": "BetaWave",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
+  },
+  {
+    "word": "GammaOscillation",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
+  },
+  {
+    "word": "ReticularActivating",
+    "group": "neurophysiology",
+    "color": "#C8DFF9"
   }
 ]

@@ -1,6 +1,3 @@
-//changer_static.js
-// 2022-2024 Marc Schubert <schubert.mc.ai@gmail.com>
-
 
 
 console.log("Starting static changer");
@@ -130,3 +127,4 @@ function removeAllColorCodingSpans(editableElement) {
         parent.removeChild(span);
     });
 }
+
